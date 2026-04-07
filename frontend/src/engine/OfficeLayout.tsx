@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
 import { Stage, Graphics, Text, useTick } from '@pixi/react';
 import * as PIXI from 'pixi.js';
 import { useOfficeStore } from '../state/officeStore';
