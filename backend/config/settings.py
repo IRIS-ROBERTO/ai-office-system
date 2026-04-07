@@ -1,26 +1,40 @@
 """
 AI Office System — Settings
 Todas as configurações via variáveis de ambiente.
+Senior Agent: Gemini 2.0 Flash (via endpoint OpenAI-compatível)
+Local Agents: Ollama (qwen2.5-coder:32b, qwen3-vl:8b, iris-fast, iris-comments, llama3.1:8b)
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
 
 
 class Settings(BaseSettings):
-    # === Modelos ===
-    # Senior Agent (caro — usado com parcimônia)
-    SENIOR_MODEL: str = "anthropic/claude-sonnet-4-6"
-    SENIOR_PROVIDER: str = "openrouter"
 
-    # Local Agent (Ollama — custo zero)
-    LOCAL_MODEL_CODE: str = "qwen2.5-coder:32b"
-    LOCAL_MODEL_GENERAL: str = "llama3.3:70b"
-    LOCAL_MODEL_REASONING: str = "deepseek-r1:32b"
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    # === Senior Agent (Gemini 2.0 Flash) ===
+    # Endpoint compatível com OpenAI — sem pacote extra necessário
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-    # Fallback via OpenRouter (modelos baratos)
-    OPENROUTER_API_KEY: str = ""
-    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    # === Modelos Locais (Ollama) ===
+    # Roteamento por especialidade — baseado nos modelos disponíveis localmente
+    LOCAL_MODEL_CODE: str = "qwen2.5-coder:32b"       # Frontend, Backend, Planner
+    LOCAL_MODEL_VISION: str = "qwen3-vl:8b"           # QA, Security, Analytics
+    LOCAL_MODEL_DOCS: str = "iris-comments:latest"    # Docs — modelo customizado
+    LOCAL_MODEL_FAST: str = "iris-fast:latest"        # Social, SEO — tarefas rápidas
+    LOCAL_MODEL_GENERAL: str = "llama3.1:8b"          # Research, Content, Strategy
+
+    # Fallbacks caso modelo não esteja disponível
+    LOCAL_MODEL_FALLBACK: str = "qwen2.5:7b"
+    LOCAL_MODEL_FALLBACK_SMALL: str = "llama3.2:3b"
+
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    LOCAL_MODEL_PATH: str = "./models/qwen2.5-3b-instruct"  # modelo quantizado local opcional
+
+    # === Supabase ===
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_KEY: str = ""
 
     # === Redis ===
     REDIS_URL: str = "redis://localhost:6379"
@@ -30,11 +44,6 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
-    # === Supabase ===
-    SUPABASE_URL: str = ""
-    SUPABASE_ANON_KEY: str = ""
-    SUPABASE_SERVICE_KEY: str = ""
-
     # === GitHub (para os agentes commitarem) ===
     GITHUB_TOKEN: str = ""
     GITHUB_USERNAME: str = "IRIS-ROBERTO"
@@ -42,9 +51,9 @@ class Settings(BaseSettings):
 
     # === Performance ===
     MAX_CONCURRENT_AGENTS: int = 12       # 6 dev + 6 marketing
-    SENIOR_MAX_TOKENS: int = 2048         # Sênior é conciso
+    SENIOR_MAX_TOKENS: int = 2048         # Sênior é conciso e direto
     LOCAL_MAX_TOKENS: int = 4096
-    ANIMATION_QUEUE_BUFFER_MS: int = 500  # Buffer visual para sincronização
+    ANIMATION_QUEUE_BUFFER_MS: int = 500
 
     # === Qualidade ===
     MAX_RETRIES_PER_SUBTASK: int = 3
