@@ -32,6 +32,10 @@ pydantic-settings>=2.3.4
 # === GitHub Integration ===
 PyGithub>=2.3.0
 
+# === System Monitoring ===
+psutil>=5.9.0           # CPU, RAM metrics — usado pelo ResourceMonitor
+pynvml>=11.5.0          # GPU NVIDIA metrics — opcional, graceful fallback
+
 # === Utilities ===
 python-dotenv>=1.0.1
 structlog>=24.2.0

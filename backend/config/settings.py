@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # === OpenRouter Management (IRIS Key Pool) ===
+    OPENROUTER_MANAGEMENT_KEY: str = ""
+
     # === GitHub (para os agentes commitarem) ===
     GITHUB_TOKEN: str = ""
     GITHUB_USERNAME: str = "IRIS-ROBERTO"
