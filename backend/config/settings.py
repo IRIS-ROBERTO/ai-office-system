@@ -10,8 +10,10 @@ from typing import Optional
 
 class Settings(BaseSettings):
 
-    # === Senior Agent (Gemini 2.0 Flash) ===
-    # Endpoint compatível com OpenAI — sem pacote extra necessário
+    # === Senior Agent — Camada 1: OpenRouter (gratuito, controlado pelo ModelGate) ===
+    OPENROUTER_API_KEY: str = ""
+
+    # === Senior Agent — Camada 2: Gemini 2.0 Flash (fallback) ===
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.0-flash"
     GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"

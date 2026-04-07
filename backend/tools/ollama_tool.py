@@ -1,15 +1,22 @@
 """
 AI Office System — LLM Bridge
-Senior Agent  : Gemini 2.0 Flash via endpoint OpenAI-compatível (sem pacote extra)
-Agentes Locais: Ollama com roteamento por especialidade
+Três camadas de execução, custo crescente:
 
-Hierarquia de custo:
-  Gemini Flash (Senior) → usado só para planejamento + quality gate
-  qwen2.5-coder:32b    → código de alta qualidade (pesado, usado com critério)
-  qwen3-vl:8b          → visão + raciocínio (QA, Security, Analytics)
-  iris-comments        → documentação (modelo customizado local)
-  llama3.1:8b          → texto geral (Research, Content, Strategy)
-  iris-fast            → tarefas rápidas (Social, SEO) — modelo customizado local
+  CAMADA 1 — Ollama local (custo zero absoluto, sem internet):
+    qwen2.5-coder:32b   → código (Frontend, Backend, Planner)
+    qwen3-vl:8b         → visão+raciocínio (QA, Security, Analytics)
+    iris-comments       → documentação (modelo customizado)
+    iris-fast           → tarefas rápidas (Social, SEO)
+    llama3.1:8b         → texto geral (Research, Content, Strategy)
+
+  CAMADA 2 — OpenRouter modelos gratuitos (internet, custo zero):
+    qwen/qwen3-coder:free              → código via nuvem
+    meta-llama/llama-3.3-70b-instruct:free → Senior Agent / orquestração
+    nvidia/nemotron-3-super-120b-a12b:free → quality gate pesado
+
+  CAMADA 3 — OpenRouter modelos pagos (bloqueados pelo ModelGate se caros):
+    Apenas modelos com custo < $0.005/chamada e $0.10/dia
+    Controlados explicitamente por backend/tools/model_gate.py
 """
 import logging
 from typing import Optional
@@ -19,8 +26,30 @@ from langchain_ollama import ChatOllama
 from langchain_core.language_models import BaseChatModel
 
 from backend.config.settings import settings
+from backend.tools.model_gate import gate, ModelNotAllowedError, BudgetExceededError
 
 logger = logging.getLogger(__name__)
+
+
+def get_openrouter_llm(model_id: str, agent_id: str = "unknown",
+                       temperature: float = 0.1) -> ChatOpenAI:
+    """
+    Retorna LLM OpenRouter com validação obrigatória do ModelGate.
+    Levanta ModelNotAllowedError se modelo não estiver na whitelist.
+    Levanta BudgetExceededError se custo estimado ultrapassar limite.
+    """
+    gate.validate(model_id=model_id, agent_id=agent_id)   # trava de segurança
+    return ChatOpenAI(
+        model=model_id,
+        openai_api_key=settings.OPENROUTER_API_KEY,
+        openai_api_base="https://openrouter.ai/api/v1",
+        temperature=temperature,
+        max_tokens=settings.SENIOR_MAX_TOKENS,
+        default_headers={
+            "HTTP-Referer": "https://ai-office-system.local",
+            "X-Title": "AI Office System",
+        },
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -29,11 +58,44 @@ logger = logging.getLogger(__name__)
 
 def get_senior_llm(temperature: float = 0.2) -> BaseChatModel:
     """
-    Senior Agent — Gemini 2.0 Flash com fallback para qwen2.5-coder:32b local.
-    Gemini: endpoint OpenAI-compatível (sem pacote extra, 1M ctx).
-    Fallback: qwen2.5-coder:32b via Ollama se Gemini indisponível.
+    Senior Agent — hierarquia de fallback com rotação de modelos gratuitos.
+
+    Ordem de tentativa:
+      1. OpenRouter free pool (rotação: 4 modelos gratuitos diferentes)
+         → Se rate-limited no primeiro, tenta o próximo automaticamente
+      2. Gemini 2.0 Flash (fallback cloud se OpenRouter indisponível)
+      3. qwen2.5-coder:32b local (fallback offline total)
     """
+    # Pool de modelos gratuitos — ordem de preferência
+    FREE_POOL = [
+        "google/gemma-4-31b-it:free",                   # Google, provedor diferente
+        "nvidia/nemotron-3-super-120b-a12b:free",        # NVIDIA, 120B
+        "meta-llama/llama-3.3-70b-instruct:free",        # Meta, 70B
+        "qwen/qwen3-next-80b-a3b-instruct:free",         # Qwen, 80B MoE
+    ]
+
+    if settings.OPENROUTER_API_KEY:
+        for model_id in FREE_POOL:
+            try:
+                gate.validate(model_id=model_id, agent_id="senior_orchestrator")
+                logger.info("Senior Agent usando OpenRouter: %s", model_id)
+                return ChatOpenAI(
+                    model=model_id,
+                    openai_api_key=settings.OPENROUTER_API_KEY,
+                    openai_api_base="https://openrouter.ai/api/v1",
+                    temperature=temperature,
+                    max_tokens=settings.SENIOR_MAX_TOKENS,
+                    default_headers={
+                        "HTTP-Referer": "https://ai-office-system.local",
+                        "X-Title": "AI Office System",
+                    },
+                )
+            except (ModelNotAllowedError, BudgetExceededError) as e:
+                logger.warning("Gate bloqueou %s: %s", model_id, e)
+                continue
+
     if settings.GEMINI_API_KEY:
+        logger.info("Senior Agent usando Gemini fallback")
         return ChatOpenAI(
             model=settings.GEMINI_MODEL,
             openai_api_key=settings.GEMINI_API_KEY,
@@ -41,8 +103,8 @@ def get_senior_llm(temperature: float = 0.2) -> BaseChatModel:
             temperature=temperature,
             max_tokens=settings.SENIOR_MAX_TOKENS,
         )
-    # Fallback: melhor modelo local disponível assume o papel de Senior
-    logger.warning("GEMINI_API_KEY ausente — Senior Agent usando qwen2.5-coder:32b local")
+
+    logger.warning("Sem API externa — Senior Agent usando qwen2.5-coder:32b local")
     return get_local_llm(model=settings.LOCAL_MODEL_CODE, temperature=temperature)
 
 
