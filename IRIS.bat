@@ -246,7 +246,7 @@ echo  [OK] Frontend respondeu
 
 echo.
 echo  [IRIS] Abrindo interface...
-start "" "%FRONTEND_URL%"
+call :OpenBrowser "%FRONTEND_URL%"
 
 echo.
 echo  ========================================================
@@ -320,6 +320,22 @@ for %%P in (3001 3002 3003 3004 3005) do (
 echo  [ERRO] Nenhuma porta livre encontrada para o frontend.
 pause
 exit /b 1
+
+:OpenBrowser
+set "TARGET_URL=%~1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "try { Start-Process '%TARGET_URL%'; exit 0 } catch { exit 1 }"
+if not errorlevel 1 exit /b 0
+
+start "" "%TARGET_URL%" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+explorer "%TARGET_URL%" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+echo  [AVISO] Nao foi possivel abrir o navegador automaticamente.
+echo          Abra manualmente: %TARGET_URL%
+exit /b 0
 
 :WaitForHttp
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
