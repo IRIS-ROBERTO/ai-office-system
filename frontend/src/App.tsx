@@ -2,12 +2,13 @@
  * IRIS — AI Office System
  * Premium shell: WebGL canvas + glass morphism HUD + live panels
  */
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { OfficeLayout } from './engine/OfficeLayout';
+import React, { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react';
 import { useEventStream } from './websocket/useEventStream';
-import { AgentPanel } from './components/ui/AgentPanel';
-import { ActivityFeed } from './components/ui/ActivityFeed';
 import { useOfficeStore } from './state/officeStore';
+
+const OfficeLayout = lazy(() => import('./engine/OfficeLayout'));
+const AgentPanel = lazy(() => import('./components/ui/AgentPanel'));
+const ActivityFeed = lazy(() => import('./components/ui/ActivityFeed'));
 
 // ─── Color tokens ─────────────────────────────────────────────────────────────
 const C = {
@@ -25,6 +26,18 @@ const C = {
   green:  '#00ff88',
   red:    '#ef4444',
   yellow: '#fbbf24',
+};
+
+const PANEL_FALLBACK_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 120,
+  padding: 16,
+  color: C.textSecondary,
+  fontSize: 12,
+  fontFamily: 'monospace',
+  letterSpacing: 0.6,
 };
 
 // ─── Utility: Status color ────────────────────────────────────────────────────
@@ -341,7 +354,9 @@ export default function App() {
             transform: `scale(${scale})`, transformOrigin: 'center center',
             lineHeight: 0, position: 'relative',
           }}>
-            <OfficeLayout onAgentClick={handleAgentClick} />
+            <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading office renderer...</div>}>
+              <OfficeLayout onAgentClick={handleAgentClick} />
+            </Suspense>
           </div>
 
           {/* Empty state */}
@@ -379,7 +394,9 @@ export default function App() {
                   Event Stream
                 </div>
               </div>
-              <ActivityFeed />
+              <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading event stream...</div>}>
+                <ActivityFeed />
+              </Suspense>
             </div>
           </div>
         )}
@@ -387,7 +404,9 @@ export default function App() {
 
       {/* ── AGENT DETAIL PANEL (floating) ────────────────────────────────── */}
       {selectedAgentId && (
-        <AgentPanel agentId={selectedAgentId} onClose={handleClosePanel} />
+        <Suspense fallback={null}>
+          <AgentPanel agentId={selectedAgentId} onClose={handleClosePanel} />
+        </Suspense>
       )}
     </div>
   );
