@@ -2,13 +2,14 @@
  * IRIS — AI Office System
  * Premium shell: WebGL canvas + glass morphism HUD + live panels
  */
-import React, { Suspense, lazy, useState, useCallback, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useEffect, useRef, startTransition } from 'react';
 import { useEventStream } from './websocket/useEventStream';
 import { useOfficeStore } from './state/officeStore';
 
 const OfficeLayout = lazy(() => import('./engine/OfficeLayout'));
 const AgentPanel = lazy(() => import('./components/ui/AgentPanel'));
 const ActivityFeed = lazy(() => import('./components/ui/ActivityFeed'));
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // ─── Color tokens ─────────────────────────────────────────────────────────────
 const C = {
@@ -185,7 +186,10 @@ const AgentRoster: React.FC<{ onAgentClick: (id: string) => void; selectedId: st
             }} />
             <div style={{ flex: 1, overflow: 'hidden' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.textPrimary,
-                textTransform: 'capitalize', letterSpacing: 0.3 }}>
+                letterSpacing: 0.6 }}>
+                {agent.agent_name}
+              </div>
+              <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 0.5, marginTop: 2, textTransform: 'capitalize' }}>
                 {agent.agent_role}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
@@ -248,6 +252,7 @@ export default function App() {
   const { connected } = useEventStream();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const agents = useOfficeStore(s => s.agents);
+  const hydrateAgents = useOfficeStore(s => s.hydrateAgents);
   const agentArr = Object.values(agents);
   const devAgents = agentArr.filter(a => a.team === 'dev');
   const mktAgents = agentArr.filter(a => a.team === 'marketing');
@@ -260,6 +265,41 @@ export default function App() {
   }, []);
 
   const handleClosePanel = useCallback(() => setSelectedAgentId(null), []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function bootstrapAgents() {
+      try {
+        const response = await fetch(`${API_URL}/agents`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch agents: ${response.status}`);
+        }
+
+        const records = await response.json() as Array<{
+          agent_id: string;
+          role: string;
+          team: 'dev' | 'marketing';
+          status: 'idle' | 'thinking' | 'working' | 'moving';
+          current_task_id: string | null;
+          completed_tasks: number;
+          error_count?: number;
+          position?: { x: number; y: number };
+        }>;
+
+        if (!cancelled) {
+          startTransition(() => hydrateAgents(records));
+        }
+      } catch (error) {
+        console.warn('[App] Failed to bootstrap /agents', error);
+      }
+    }
+
+    bootstrapAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateAgents]);
 
   // Scale canvas to fit viewport
   const [scale, setScale] = useState(1);

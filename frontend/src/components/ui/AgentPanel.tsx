@@ -1,4 +1,5 @@
 import React, { useCallback } from 'react';
+import { getAgentProfile } from '../../data/agentProfiles';
 import { useOfficeStore } from '../../state/officeStore';
 
 interface AgentPanelProps {
@@ -8,192 +9,27 @@ interface AgentPanelProps {
 
 const STATUS_LABELS: Record<string, string> = {
   idle: 'Idle',
-  thinking: 'Thinking…',
+  thinking: 'Thinking',
   working: 'Working',
   moving: 'Moving',
 };
 
 const STATUS_COLORS: Record<string, string> = {
   idle: '#94a3b8',
-  thinking: '#a855f7',
+  thinking: '#f59e0b',
   working: '#22c55e',
   moving: '#3b82f6',
 };
 
 const TASK_STATUS_COLORS: Record<string, string> = {
   pending: '#6b7280',
-  assigned: '#3b82f6',
+  assigned: '#6366f1',
   in_progress: '#f59e0b',
   completed: '#22c55e',
   failed: '#ef4444',
 };
 
-export const AgentPanel: React.FC<AgentPanelProps> = ({ agentId, onClose }) => {
-  const agent = useOfficeStore((s) => (agentId ? s.agents[agentId] : null));
-  const tasks = useOfficeStore((s) => s.tasks);
-
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.target === e.currentTarget) onClose();
-    },
-    [onClose]
-  );
-
-  if (!agentId || !agent) return null;
-
-  const currentTask = agent.current_task_id ? tasks[agent.current_task_id] : null;
-
-  const completedTasks = Object.values(tasks).filter(
-    (t) => t.assigned_agent_id === agentId && t.status === 'completed'
-  );
-  const allAgentTasks = Object.values(tasks).filter(
-    (t) => t.assigned_agent_id === agentId
-  );
-
-  return (
-    <div
-      style={styles.backdrop}
-      onClick={handleBackdropClick}
-    >
-      <div style={styles.panel}>
-        {/* Header */}
-        <div style={styles.header}>
-          <div style={styles.headerLeft}>
-            <div
-              style={{
-                ...styles.colorDot,
-                backgroundColor: agent.color,
-                boxShadow: `0 0 10px ${agent.color}88`,
-              }}
-            />
-            <div>
-              {/* Codinome em destaque */}
-              <div style={{ ...styles.agentRole, letterSpacing: '0.1em' }}>
-                {agent.agent_name || agent.agent_role.split(' ')[0].toUpperCase()}
-              </div>
-              <div style={{ ...styles.agentId, opacity: 0.55 }}>{agent.agent_role}</div>
-            </div>
-          </div>
-          <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-
-        {/* Status row */}
-        <div style={styles.statusRow}>
-          <span style={styles.label}>Status</span>
-          <span
-            style={{
-              ...styles.statusBadge,
-              color: STATUS_COLORS[agent.status] || '#94a3b8',
-              borderColor: STATUS_COLORS[agent.status] || '#94a3b8',
-            }}
-          >
-            <span style={{
-              ...styles.statusDot,
-              backgroundColor: STATUS_COLORS[agent.status] || '#94a3b8',
-            }} />
-            {STATUS_LABELS[agent.status] || agent.status}
-          </span>
-        </div>
-
-        {/* Team */}
-        <div style={styles.infoRow}>
-          <span style={styles.label}>Team</span>
-          <span style={styles.value}>{agent.team.toUpperCase()}</span>
-        </div>
-
-        {/* Position */}
-        <div style={styles.infoRow}>
-          <span style={styles.label}>Position</span>
-          <span style={styles.value}>
-            x: {Math.round(agent.position.x)}, y: {Math.round(agent.position.y)}
-          </span>
-        </div>
-
-        {/* Divider */}
-        <div style={styles.divider} />
-
-        {/* Current task */}
-        <div style={styles.sectionTitle}>Current Task</div>
-        {currentTask ? (
-          <div style={styles.taskCard}>
-            <div style={styles.taskIdRow}>
-              <span style={styles.taskIdText}>{currentTask.task_id.slice(0, 16)}…</span>
-              <span
-                style={{
-                  ...styles.taskStatusBadge,
-                  color: TASK_STATUS_COLORS[currentTask.status] || '#94a3b8',
-                }}
-              >
-                {currentTask.status.replace('_', ' ')}
-              </span>
-            </div>
-            <div style={styles.taskRequest}>{currentTask.request || '(no description)'}</div>
-          </div>
-        ) : (
-          <div style={styles.noTask}>No active task</div>
-        )}
-
-        {/* Divider */}
-        <div style={styles.divider} />
-
-        {/* Stats */}
-        <div style={styles.statsRow}>
-          <div style={styles.statBlock}>
-            <div style={styles.statValue}>{completedTasks.length}</div>
-            <div style={styles.statLabel}>Completed</div>
-          </div>
-          <div style={styles.statBlock}>
-            <div style={styles.statValue}>{allAgentTasks.length}</div>
-            <div style={styles.statLabel}>Total Tasks</div>
-          </div>
-          <div style={styles.statBlock}>
-            <div style={styles.statValue}>
-              {allAgentTasks.length > 0
-                ? Math.round((completedTasks.length / allAgentTasks.length) * 100)
-                : 0}%
-            </div>
-            <div style={styles.statLabel}>Success Rate</div>
-          </div>
-        </div>
-
-        {/* Task history */}
-        {allAgentTasks.length > 0 && (
-          <>
-            <div style={styles.divider} />
-            <div style={styles.sectionTitle}>Task History</div>
-            <div style={styles.taskList}>
-              {allAgentTasks.slice(-5).reverse().map((t) => (
-                <div key={t.task_id} style={styles.taskHistoryItem}>
-                  <span
-                    style={{
-                      ...styles.taskHistoryDot,
-                      backgroundColor: TASK_STATUS_COLORS[t.status] || '#94a3b8',
-                    }}
-                  />
-                  <span style={styles.taskHistoryText}>
-                    {t.request.slice(0, 32)}{t.request.length > 32 ? '…' : ''}
-                  </span>
-                  <span
-                    style={{
-                      ...styles.taskHistoryStatus,
-                      color: TASK_STATUS_COLORS[t.status] || '#94a3b8',
-                    }}
-                  >
-                    {t.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const styles: Record<string, React.CSSProperties> = {
+const panelStyles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: 'fixed',
     inset: 0,
@@ -205,97 +41,127 @@ const styles: Record<string, React.CSSProperties> = {
     top: '50%',
     right: 24,
     transform: 'translateY(-50%)',
-    width: 300,
-    maxHeight: '80vh',
+    width: 380,
+    maxHeight: '84vh',
     overflowY: 'auto',
-    background: 'rgba(10, 10, 20, 0.92)',
-    backdropFilter: 'blur(16px)',
-    WebkitBackdropFilter: 'blur(16px)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 14,
-    padding: '20px 18px',
+    background: 'linear-gradient(180deg, rgba(7,10,20,0.96) 0%, rgba(10,10,20,0.94) 100%)',
+    backdropFilter: 'blur(18px)',
+    WebkitBackdropFilter: 'blur(18px)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 18,
+    padding: '20px 18px 18px',
     color: '#e2e8f0',
-    boxShadow: '0 8px 40px rgba(0,0,0,0.7)',
+    boxShadow: '0 18px 60px rgba(0,0,0,0.6)',
     pointerEvents: 'all',
     scrollbarWidth: 'thin',
-    scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+    scrollbarColor: 'rgba(255,255,255,0.14) transparent',
   },
   header: {
     display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    alignItems: 'flex-start',
+    gap: 16,
   },
-  headerLeft: {
+  identityBlock: {
     display: 'flex',
-    alignItems: 'center',
-    gap: 12,
+    gap: 14,
+    flex: 1,
   },
-  colorDot: {
-    width: 36,
-    height: 36,
-    borderRadius: '50%',
+  avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     flexShrink: 0,
+    marginTop: 2,
   },
-  agentRole: {
-    fontSize: 16,
-    fontWeight: 700,
-    letterSpacing: 0.5,
-    textTransform: 'capitalize',
+  codename: {
+    fontSize: 22,
+    fontWeight: 800,
+    letterSpacing: 1.6,
+    lineHeight: 1,
   },
-  agentId: {
+  title: {
+    fontSize: 11,
+    color: '#cbd5e1',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    marginTop: 6,
+  },
+  roleLine: {
     fontSize: 10,
     color: '#64748b',
     fontFamily: 'monospace',
-    marginTop: 2,
+    marginTop: 6,
   },
   closeBtn: {
-    background: 'rgba(255,255,255,0.08)',
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 8,
+    background: 'rgba(255,255,255,0.04)',
     color: '#94a3b8',
     cursor: 'pointer',
-    fontSize: 13,
-    width: 28,
-    height: 28,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0,
-    transition: 'background 0.15s',
   },
-  statusRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
+  heroCard: {
+    marginTop: 18,
+    padding: '14px 14px 12px',
+    borderRadius: 14,
+    border: '1px solid rgba(255,255,255,0.07)',
+    background: 'rgba(255,255,255,0.035)',
   },
-  infoRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
+  summary: {
+    fontSize: 13,
+    lineHeight: 1.65,
+    color: '#dbe4f0',
   },
-  label: {
+  mission: {
     fontSize: 11,
+    color: '#94a3b8',
+    lineHeight: 1.6,
+    marginTop: 10,
+  },
+  signature: {
+    marginTop: 10,
+    fontSize: 11,
+    color: '#e2e8f0',
+    fontStyle: 'italic',
+  },
+  statusStrip: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 10,
+    marginTop: 16,
+  },
+  statusCard: {
+    borderRadius: 12,
+    padding: '12px 12px 10px',
+    background: 'rgba(255,255,255,0.03)',
+    border: '1px solid rgba(255,255,255,0.06)',
+  },
+  statusLabel: {
+    fontSize: 9,
     color: '#64748b',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 1.1,
+    marginBottom: 8,
   },
-  value: {
+  statusValue: {
     fontSize: 12,
-    color: '#cbd5e1',
-    fontFamily: 'monospace',
+    color: '#e2e8f0',
+    fontWeight: 700,
   },
   statusBadge: {
-    display: 'flex',
+    display: 'inline-flex',
     alignItems: 'center',
-    gap: 6,
-    fontSize: 12,
-    fontWeight: 600,
+    gap: 7,
+    fontSize: 11,
+    padding: '4px 10px',
+    borderRadius: 999,
     border: '1px solid',
-    borderRadius: 20,
-    padding: '2px 10px',
+    marginTop: 2,
   },
   statusDot: {
     width: 7,
@@ -303,107 +169,337 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '50%',
     flexShrink: 0,
   },
-  divider: {
-    height: 1,
-    background: 'rgba(255,255,255,0.07)',
-    margin: '14px 0',
+  section: {
+    marginTop: 18,
   },
   sectionTitle: {
     fontSize: 10,
     color: '#64748b',
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 1.4,
     marginBottom: 10,
   },
-  taskCard: {
-    background: 'rgba(255,255,255,0.04)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 8,
-    padding: '10px 12px',
-  },
-  taskIdRow: {
+  chipRow: {
     display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
+    flexWrap: 'wrap',
+    gap: 8,
   },
-  taskIdText: {
-    fontSize: 9,
-    color: '#475569',
-    fontFamily: 'monospace',
-  },
-  taskStatusBadge: {
+  chip: {
     fontSize: 10,
-    fontWeight: 600,
-    textTransform: 'capitalize',
+    color: '#dbe4f0',
+    padding: '5px 10px',
+    borderRadius: 999,
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.07)',
+  },
+  statGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    gap: 10,
+  },
+  statCard: {
+    textAlign: 'center',
+    padding: '12px 8px',
+    borderRadius: 12,
+    background: 'rgba(255,255,255,0.03)',
+    border: '1px solid rgba(255,255,255,0.06)',
+  },
+  statValue: {
+    fontSize: 22,
+    fontWeight: 800,
+    color: '#f8fafc',
+    lineHeight: 1,
+  },
+  statCaption: {
+    marginTop: 6,
+    fontSize: 9,
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  taskCard: {
+    padding: '12px 14px',
+    borderRadius: 14,
+    background: 'rgba(255,255,255,0.035)',
+    border: '1px solid rgba(255,255,255,0.07)',
+  },
+  taskTopRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  taskId: {
+    fontSize: 10,
+    color: '#64748b',
+    fontFamily: 'monospace',
   },
   taskRequest: {
     fontSize: 12,
-    color: '#cbd5e1',
+    color: '#dbe4f0',
+    lineHeight: 1.55,
+  },
+  badge: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: 'capitalize',
+  },
+  timeline: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  timelineItem: {
+    display: 'grid',
+    gridTemplateColumns: '10px 1fr',
+    gap: 10,
+    padding: '10px 10px 10px 0',
+    borderBottom: '1px solid rgba(255,255,255,0.05)',
+  },
+  timelineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    marginTop: 5,
+  },
+  timelineMessage: {
+    fontSize: 11,
+    color: '#dbe4f0',
     lineHeight: 1.5,
   },
-  noTask: {
+  timelineMeta: {
+    marginTop: 4,
+    fontSize: 9,
+    color: '#64748b',
+    fontFamily: 'monospace',
+    display: 'flex',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  noState: {
     fontSize: 12,
-    color: '#475569',
+    color: '#64748b',
     fontStyle: 'italic',
     textAlign: 'center',
     padding: '8px 0',
   },
-  statsRow: {
-    display: 'flex',
-    justifyContent: 'space-around',
-    textAlign: 'center',
-  },
-  statBlock: {
+  bulletList: {
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
-    gap: 4,
-  },
-  statValue: {
-    fontSize: 22,
-    fontWeight: 700,
-    color: '#f1f5f9',
-  },
-  statLabel: {
-    fontSize: 9,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  taskList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  },
-  taskHistoryItem: {
-    display: 'flex',
-    alignItems: 'center',
     gap: 8,
-    background: 'rgba(255,255,255,0.03)',
-    borderRadius: 6,
-    padding: '5px 8px',
   },
-  taskHistoryDot: {
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
-  taskHistoryText: {
+  bulletItem: {
     fontSize: 11,
-    color: '#94a3b8',
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    color: '#cbd5e1',
+    lineHeight: 1.5,
+    paddingLeft: 14,
+    position: 'relative',
   },
-  taskHistoryStatus: {
-    fontSize: 10,
-    fontWeight: 600,
-    textTransform: 'capitalize',
-    flexShrink: 0,
-  },
+};
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function RuntimeTimeline({ items }: { items: Array<{ id: string; message: string; timestamp: number; task_id: string | null; tone: string }> }) {
+  if (items.length === 0) {
+    return <div style={panelStyles.noState}>No runtime activity recorded yet.</div>;
+  }
+
+  return (
+    <div style={panelStyles.timeline}>
+      {items.map((item) => (
+        <div key={item.id} style={panelStyles.timelineItem}>
+          <div style={{ ...panelStyles.timelineDot, background: item.tone, boxShadow: `0 0 12px ${item.tone}55` }} />
+          <div>
+            <div style={panelStyles.timelineMessage}>{item.message}</div>
+            <div style={panelStyles.timelineMeta}>
+              <span>{formatTime(item.timestamp)}</span>
+              {item.task_id ? <span>{item.task_id.slice(0, 12)}…</span> : null}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export const AgentPanel: React.FC<AgentPanelProps> = ({ agentId, onClose }) => {
+  const agent = useOfficeStore((s) => (agentId ? s.agents[agentId] : null));
+  const tasks = useOfficeStore((s) => s.tasks);
+  const activity = useOfficeStore((s) => (agentId ? s.agentActivity[agentId] || [] : []));
+
+  const handleBackdropClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target === e.currentTarget) onClose();
+    },
+    [onClose]
+  );
+
+  if (!agentId || !agent) return null;
+
+  const profile = getAgentProfile(agent.agent_id, agent.agent_role);
+  const currentTask = agent.current_task_id ? tasks[agent.current_task_id] : null;
+  const allAgentTasks = Object.values(tasks).filter((task) => task.assigned_agent_id === agentId);
+  const completedTasks = allAgentTasks.filter((task) => task.status === 'completed');
+  const successRate = allAgentTasks.length > 0
+    ? Math.round((completedTasks.length / allAgentTasks.length) * 100)
+    : 100;
+  const latestActivity = activity[0];
+  const headerGlow = `${agent.color}33`;
+
+  return (
+    <div style={panelStyles.backdrop} onClick={handleBackdropClick}>
+      <div style={{ ...panelStyles.panel, borderColor: headerGlow }}>
+        <div style={panelStyles.header}>
+          <div style={panelStyles.identityBlock}>
+            <div
+              style={{
+                ...panelStyles.avatar,
+                background: `linear-gradient(145deg, ${agent.color}, rgba(255,255,255,0.08))`,
+                boxShadow: `0 0 22px ${headerGlow}`,
+              }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ ...panelStyles.codename, color: agent.color }}>{profile.codename}</div>
+              <div style={panelStyles.title}>{profile.title}</div>
+              <div style={panelStyles.roleLine}>
+                {agent.team.toUpperCase()} / {agent.agent_role} / {agent.agent_id}
+              </div>
+            </div>
+          </div>
+          <button style={panelStyles.closeBtn} onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ ...panelStyles.heroCard, borderColor: `${agent.color}26` }}>
+          <div style={panelStyles.summary}>{profile.summary}</div>
+          <div style={panelStyles.mission}><strong style={{ color: '#e2e8f0' }}>Mission:</strong> {profile.mission}</div>
+          <div style={panelStyles.signature}>“{profile.signature}”</div>
+        </div>
+
+        <div style={panelStyles.statusStrip}>
+          <div style={panelStyles.statusCard}>
+            <div style={panelStyles.statusLabel}>Live Status</div>
+            <div
+              style={{
+                ...panelStyles.statusBadge,
+                color: STATUS_COLORS[agent.status] || '#94a3b8',
+                borderColor: STATUS_COLORS[agent.status] || '#94a3b8',
+              }}
+            >
+              <span style={{ ...panelStyles.statusDot, backgroundColor: STATUS_COLORS[agent.status] || '#94a3b8' }} />
+              {STATUS_LABELS[agent.status] || agent.status}
+            </div>
+          </div>
+          <div style={panelStyles.statusCard}>
+            <div style={panelStyles.statusLabel}>Last Signal</div>
+            <div style={panelStyles.statusValue}>
+              {latestActivity ? latestActivity.message : 'Profile loaded and awaiting work'}
+            </div>
+          </div>
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Personality Matrix</div>
+          <div style={panelStyles.chipRow}>
+            {profile.personality.map((trait) => (
+              <span key={trait} style={{ ...panelStyles.chip, borderColor: `${agent.color}22` }}>{trait}</span>
+            ))}
+          </div>
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Strengths & Toolkit</div>
+          <div style={panelStyles.chipRow}>
+            {profile.strengths.map((strength) => (
+              <span key={strength} style={panelStyles.chip}>{strength}</span>
+            ))}
+            {profile.toolkit.map((tool) => (
+              <span key={tool} style={{ ...panelStyles.chip, color: '#94a3b8' }}>{tool}</span>
+            ))}
+          </div>
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Professional Snapshot</div>
+          <div style={panelStyles.taskCard}>
+            <div style={panelStyles.taskRequest}>{profile.experience}</div>
+          </div>
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Performance Ledger</div>
+          <div style={panelStyles.statGrid}>
+            <div style={panelStyles.statCard}>
+              <div style={{ ...panelStyles.statValue, color: '#22c55e' }}>{agent.completed_tasks}</div>
+              <div style={panelStyles.statCaption}>Completed</div>
+            </div>
+            <div style={panelStyles.statCard}>
+              <div style={panelStyles.statValue}>{allAgentTasks.length}</div>
+              <div style={panelStyles.statCaption}>Tracked</div>
+            </div>
+            <div style={panelStyles.statCard}>
+              <div style={{ ...panelStyles.statValue, color: '#fbbf24' }}>{successRate}%</div>
+              <div style={panelStyles.statCaption}>Success</div>
+            </div>
+            <div style={panelStyles.statCard}>
+              <div style={{ ...panelStyles.statValue, color: agent.error_count > 0 ? '#ef4444' : '#94a3b8' }}>
+                {agent.error_count}
+              </div>
+              <div style={panelStyles.statCaption}>Errors</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Current Assignment</div>
+          {currentTask ? (
+            <div style={panelStyles.taskCard}>
+              <div style={panelStyles.taskTopRow}>
+                <span style={panelStyles.taskId}>{currentTask.task_id.slice(0, 16)}…</span>
+                <span
+                  style={{
+                    ...panelStyles.badge,
+                    color: TASK_STATUS_COLORS[currentTask.status] || '#94a3b8',
+                  }}
+                >
+                  {currentTask.status.replace('_', ' ')}
+                </span>
+              </div>
+              <div style={panelStyles.taskRequest}>{currentTask.request || '(no description)'}</div>
+            </div>
+          ) : (
+            <div style={panelStyles.noState}>No active task at the moment.</div>
+          )}
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Career Highlights</div>
+          <div style={panelStyles.bulletList}>
+            {profile.careerHighlights.map((item) => (
+              <div key={item} style={panelStyles.bulletItem}>
+                <span style={{ position: 'absolute', left: 0, color: agent.color }}>•</span>
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={panelStyles.section}>
+          <div style={panelStyles.sectionTitle}>Runtime Timeline</div>
+          <RuntimeTimeline items={activity} />
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default AgentPanel;

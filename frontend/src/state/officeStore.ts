@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getAgentProfile } from '../data/agentProfiles';
 
 export interface Agent {
   agent_id: string;
@@ -9,6 +10,8 @@ export interface Agent {
   current_task_id: string | null;
   position: { x: number; y: number };
   color: string;
+  completed_tasks: number;
+  error_count: number;
 }
 
 export interface Task {
@@ -26,39 +29,40 @@ export interface AnimationQueueItem {
   timestamp: number;
 }
 
+export interface AgentActivityItem {
+  id: string;
+  event_type: string;
+  message: string;
+  timestamp: number;
+  task_id: string | null;
+  tone: string;
+}
+
+export interface AgentBootstrapRecord {
+  agent_id: string;
+  role: string;
+  team: 'dev' | 'marketing';
+  status: Agent['status'];
+  current_task_id: string | null;
+  completed_tasks: number;
+  error_count?: number;
+  position?: { x: number; y: number };
+}
+
 interface OfficeStore {
   agents: Record<string, Agent>;
   tasks: Record<string, Task>;
   animationQueue: AnimationQueueItem[];
+  agentActivity: Record<string, AgentActivityItem[]>;
   connected: boolean;
 
   // Actions
   processEvent: (event: Record<string, unknown>) => void;
+  hydrateAgents: (records: AgentBootstrapRecord[]) => void;
   setConnected: (v: boolean) => void;
   dequeueAnimation: () => AnimationQueueItem | undefined;
   getAgentsByTeam: (team: string) => Agent[];
 }
-
-// ── Agent identity registry — codinomes + cores por role ─────────────────────
-// DEV  team: frios (azul, ciano, verde)
-// MKT  team: quentes (roxo, rosa, âmbar)
-// Cada agente tem cor única para identificação no canvas
-export const AGENT_CODENAMES: Record<string, string> = {
-  // Dev Team
-  dev_planner_01:  'ATLAS',
-  dev_frontend_01: 'PIXEL',
-  dev_backend_01:  'FORGE',
-  dev_qa_01:       'SHERLOCK',
-  dev_security_01: 'AEGIS',
-  dev_docs_01:     'LORE',
-  // Marketing Team
-  mkt_research_01: 'ORACLE',
-  mkt_strategy_01: 'MAVEN',
-  mkt_content_01:  'NOVA',
-  mkt_seo_01:      'APEX',
-  mkt_social_01:   'PULSE',
-  mkt_analytics_01:'PRISM',
-};
 
 const ROLE_COLORS: Record<string, string> = {
   // Dev team — tons frios
@@ -151,8 +155,7 @@ function ensureAgent(
     agent_id: agentId,
     agent_name:
       (event.agent_name as string | undefined) ||
-      AGENT_CODENAMES[agentId] ||
-      role.split(' ')[0].toUpperCase(),
+      getAgentProfile(agentId, role).codename,
     agent_role: role,
     team: uiTeam,
     status: 'idle',
@@ -161,6 +164,8 @@ function ensureAgent(
       (event.position as { x: number; y: number } | undefined) ||
       getDefaultPosition(effectiveTeam, idx),
     color: getRoleColor(role),
+    completed_tasks: 0,
+    error_count: 0,
   };
 
   return agentId;
@@ -194,13 +199,96 @@ function ensureTask(
   return taskId;
 }
 
+function buildActivityItem(event: Record<string, unknown>): AgentActivityItem | null {
+  const eventType = String(event.event_type || '');
+  const taskId = (event.task_id as string | undefined) ?? null;
+  const role = String(event.agent_role || event.role || 'agent');
+  const payload = (event.payload as Record<string, unknown> | undefined) || {};
+  const subtask = typeof payload.subtask_title === 'string' ? payload.subtask_title : null;
+  const request = typeof payload.request === 'string' ? payload.request : null;
+
+  const map: Record<string, { message: string; tone: string }> = {
+    agent_called: { message: `${role} was called into the workflow`, tone: '#fbbf24' },
+    agent_assigned: { message: `${role} accepted a new assignment`, tone: '#6366f1' },
+    agent_thinking: { message: `${role} is reasoning through the next move`, tone: '#f59e0b' },
+    agent_idle: { message: `${role} returned to idle state`, tone: '#64748b' },
+    agent_moving: { message: `${role} is relocating through the office`, tone: '#3b82f6' },
+    task_created: { message: request || 'A new mission entered the queue', tone: '#a855f7' },
+    task_started: { message: subtask || 'Execution started', tone: '#f59e0b' },
+    task_in_progress: { message: subtask || 'Task execution in progress', tone: '#f59e0b' },
+    task_completed: { message: subtask || 'Task completed successfully', tone: '#22c55e' },
+    task_failed: { message: subtask || 'Task failed and needs review', tone: '#ef4444' },
+  };
+
+  const template = map[eventType];
+  if (!template) return null;
+
+  const ts = typeof event.timestamp === 'string' ? Date.parse(event.timestamp) : Date.now();
+  return {
+    id: String(event.event_id || `${eventType}-${Date.now()}-${Math.random()}`),
+    event_type: eventType,
+    message: template.message,
+    timestamp: Number.isNaN(ts) ? Date.now() : ts,
+    task_id: taskId,
+    tone: template.tone,
+  };
+}
+
 export const useOfficeStore = create<OfficeStore>((set, get) => ({
   agents: {},
   tasks: {},
   animationQueue: [],
+  agentActivity: {},
   connected: false,
 
   setConnected: (v) => set({ connected: v }),
+
+  hydrateAgents: (records) => {
+    set((state) => {
+      const nextAgents = { ...state.agents };
+      const nextActivity = { ...state.agentActivity };
+
+      for (const record of records) {
+        const team = record.team === 'marketing' ? 'marketing' : 'dev';
+        const profile = getAgentProfile(record.agent_id, record.role);
+        const existing = nextAgents[record.agent_id];
+        const effectiveTeam = team === 'marketing' ? 'marketing' : 'dev';
+        const idx = agentIndexByTeam[effectiveTeam] ?? 0;
+
+        if (!existing) {
+          agentIndexByTeam[effectiveTeam] = idx + 1;
+        }
+
+        nextAgents[record.agent_id] = {
+          agent_id: record.agent_id,
+          agent_name: profile.codename,
+          agent_role: record.role,
+          team,
+          status: record.status,
+          current_task_id: record.current_task_id,
+          position: record.position || existing?.position || getDefaultPosition(effectiveTeam, idx),
+          color: existing?.color || getRoleColor(record.role),
+          completed_tasks: record.completed_tasks,
+          error_count: record.error_count ?? existing?.error_count ?? 0,
+        };
+
+        if (!nextActivity[record.agent_id]) {
+          nextActivity[record.agent_id] = [
+            {
+              id: `${record.agent_id}-boot`,
+              event_type: 'agent_bootstrapped',
+              message: `${profile.codename} profile loaded into the office`,
+              timestamp: Date.now(),
+              task_id: null,
+              tone: '#94a3b8',
+            },
+          ];
+        }
+      }
+
+      return { agents: nextAgents, agentActivity: nextActivity };
+    });
+  },
 
   processEvent: (event) => {
     const eventType = String(event.event_type || '');
@@ -209,8 +297,10 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
       const newAgents = { ...state.agents };
       const newTasks = { ...state.tasks };
       const newQueue = [...state.animationQueue];
+      const newActivity = { ...state.agentActivity };
       const agentId = ensureAgent(newAgents, event);
       const taskId = ensureTask(newTasks, event);
+      const activityItem = buildActivityItem(event);
 
       switch (eventType) {
         case 'agent_registered':
@@ -341,6 +431,9 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
               ...newAgents[agentId],
               status: isFinalTaskEvent ? 'idle' : newAgents[agentId].status,
               current_task_id: isFinalTaskEvent ? null : newAgents[agentId].current_task_id,
+              completed_tasks: isFinalTaskEvent
+                ? newAgents[agentId].completed_tasks + 1
+                : newAgents[agentId].completed_tasks,
             };
           }
           break;
@@ -355,6 +448,7 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
               ...newAgents[agentId],
               status: 'idle',
               current_task_id: null,
+              error_count: newAgents[agentId].error_count + 1,
             };
           }
           break;
@@ -372,9 +466,19 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
           payload: event,
           timestamp: Date.now() + 500,
         });
+
+        if (activityItem) {
+          const current = newActivity[agentId] || [];
+          newActivity[agentId] = [activityItem, ...current].slice(0, 12);
+        }
       }
 
-      return { agents: newAgents, tasks: newTasks, animationQueue: newQueue };
+      return {
+        agents: newAgents,
+        tasks: newTasks,
+        animationQueue: newQueue,
+        agentActivity: newActivity,
+      };
     });
   },
 

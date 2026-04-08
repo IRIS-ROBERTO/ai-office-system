@@ -25,6 +25,8 @@ class AgentStatus(BaseModel):
     status: str
     current_task_id: Optional[str] = None
     completed_tasks: int
+    error_count: int = 0
+    position: dict[str, int]
 
 
 class SystemHealth(BaseModel):

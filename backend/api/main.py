@@ -243,6 +243,8 @@ async def list_agents():
             status=agent["status"],
             current_task_id=agent.get("current_task_id"),
             completed_tasks=agent.get("completed_tasks", 0),
+            error_count=agent.get("error_count", 0),
+            position=agent.get("position", {"x": 0, "y": 0}),
         )
         for agent in sorted(agent_registry.values(), key=lambda item: (item["team"], item["agent_role"]))
     ]
