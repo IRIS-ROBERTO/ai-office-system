@@ -5,13 +5,15 @@ title IRIS - AI Office System
 setlocal EnableExtensions DisableDelayedExpansion
 
 set "ROOT=%~dp0"
-set "VENV=%ROOT%.venv\Scripts"
-set "FRONTEND=%ROOT%frontend"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "VENV=%ROOT%\.venv\Scripts"
+set "FRONTEND=%ROOT%\frontend"
 set "FRONTEND_ENV_FILE=%FRONTEND%\.env.local"
-set "COMPOSE_FILE=%ROOT%docker-compose.yml"
-set "LOG_DIR=%ROOT%logs"
+set "COMPOSE_FILE=%ROOT%\docker-compose.yml"
+set "LOG_DIR=%ROOT%\logs"
 set "BACKEND_LOG=%LOG_DIR%\iris-backend.log"
 set "FRONTEND_LOG=%LOG_DIR%\iris-frontend.log"
+set "SERVICE_RUNNER=%ROOT%\scripts\run_iris_service.ps1"
 set "BACKEND_MODULE=backend.api.main:app"
 set "BACKEND_PORT=8000"
 set "FRONTEND_PORT=3000"
@@ -27,25 +29,32 @@ echo   IRIS - AI Office System ^| Boot completo
 echo  ========================================================
 echo.
 
-if not exist "%ROOT%backend" (
+if not exist "%ROOT%\backend" (
     echo  [ERRO] Pasta backend nao encontrada em %ROOT%
     pause
     exit /b 1
 )
 
-if not exist "%ROOT%frontend" (
+if not exist "%ROOT%\frontend" (
     echo  [ERRO] Pasta frontend nao encontrada em %ROOT%
     pause
     exit /b 1
 )
 
-if not exist "%ROOT%.env" (
+if not exist "%ROOT%\.env" (
     echo  [ERRO] Arquivo .env nao encontrado em %ROOT%
     echo         Copie .env.example para .env e configure as chaves.
     pause
     exit /b 1
 )
 echo  [OK] .env encontrado
+
+if not exist "%SERVICE_RUNNER%" (
+    echo  [ERRO] Script auxiliar nao encontrado em %SERVICE_RUNNER%
+    pause
+    exit /b 1
+)
+echo  [OK] Helper de inicializacao detectado
 
 if not exist "%VENV%\python.exe" (
     echo  [ERRO] Virtualenv nao encontrado em %VENV%
@@ -84,7 +93,7 @@ echo  [CHECK] Validando dependencias Python do backend...
 "%VENV%\python.exe" -c "import fastapi, uvicorn" >nul 2>&1
 if errorlevel 1 (
     echo  [SETUP] Instalando dependencias Python...
-    call "%VENV%\pip.exe" install -r "%ROOT%requirements.txt"
+    call "%VENV%\pip.exe" install -r "%ROOT%\requirements.txt"
     if errorlevel 1 (
         echo  [ERRO] Falha ao instalar dependencias Python
         pause
@@ -213,7 +222,7 @@ echo          Para tempo real completo, use Docker Desktop, WSL ou redis-server 
 
 echo.
 echo  [BACKEND] Iniciando FastAPI em %API_URL%...
-start "IRIS-Backend" /min cmd /k "cd /d \"%ROOT%\" && set \"REDIS_URL=redis://127.0.0.1:%REDIS_PORT%\" && \"%VENV%\python.exe\" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info >> \"%BACKEND_LOG%\" 2>&1"
+start "IRIS-Backend" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVICE_RUNNER%" -Title "IRIS-Backend" -WorkingDirectory "%ROOT%" -Executable "%VENV%\python.exe" -LogPath "%BACKEND_LOG%" -EnvLine "REDIS_URL=redis://127.0.0.1:%REDIS_PORT%" -ArgumentLine "-m|uvicorn|%BACKEND_MODULE%|--host|0.0.0.0|--port|%BACKEND_PORT%|--log-level|info"
 call :WaitForHttp "%API_URL%/docs" 45
 if errorlevel 1 (
     echo  [ERRO] Backend nao respondeu em %API_URL%/docs
@@ -233,7 +242,7 @@ if errorlevel 1 (
 
 echo.
 echo  [FRONTEND] Iniciando Vite em %FRONTEND_URL%...
-start "IRIS-Frontend" /min cmd /k "cd /d \"%FRONTEND%\" && set \"VITE_API_URL=%API_URL%\" && set \"VITE_WS_URL=%WS_URL%\" && npm run dev -- --port %FRONTEND_PORT% >> \"%FRONTEND_LOG%\" 2>&1"
+start "IRIS-Frontend" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVICE_RUNNER%" -Title "IRIS-Frontend" -WorkingDirectory "%FRONTEND%" -Executable "cmd.exe" -LogPath "%FRONTEND_LOG%" -EnvLine "VITE_API_URL=%API_URL%|VITE_WS_URL=%WS_URL%" -ArgumentLine "/c|npm|run|dev|--|--port|%FRONTEND_PORT%"
 call :WaitForHttp "%FRONTEND_URL%" 45
 if errorlevel 1 (
     echo  [ERRO] Frontend nao respondeu em %FRONTEND_URL%
