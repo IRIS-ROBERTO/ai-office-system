@@ -219,7 +219,7 @@ const EmptyState: React.FC<{ connected: boolean }> = ({ connected }) => {
         {connected ? `Awaiting agents${dots}` : 'Connecting to IRIS backend'}
       </div>
       <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.15)', fontFamily: 'monospace' }}>
-        {connected ? 'POST /tasks/dev to start' : 'ws://localhost:8000/ws'}
+        {connected ? 'POST /tasks/dev to start' : (import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000/ws')}
       </div>
       {!connected && (
         <div style={{ marginTop: 16, fontSize: 10, color: 'rgba(251,191,36,0.4)', fontFamily: 'monospace' }}>

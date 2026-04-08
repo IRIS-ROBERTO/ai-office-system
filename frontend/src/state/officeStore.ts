@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export interface Agent {
   agent_id: string;
+  agent_name: string;        // Codinome: ATLAS, PIXEL, FORGE, etc.
   agent_role: string;
   team: 'dev' | 'marketing';
   status: 'idle' | 'thinking' | 'working' | 'moving';
@@ -38,26 +39,45 @@ interface OfficeStore {
   getAgentsByTeam: (team: string) => Agent[];
 }
 
-// Role color mapping
+// ── Agent identity registry — codinomes + cores por role ─────────────────────
+// DEV  team: frios (azul, ciano, verde)
+// MKT  team: quentes (roxo, rosa, âmbar)
+// Cada agente tem cor única para identificação no canvas
+export const AGENT_CODENAMES: Record<string, string> = {
+  // Dev Team
+  dev_planner_01:  'ATLAS',
+  dev_frontend_01: 'PIXEL',
+  dev_backend_01:  'FORGE',
+  dev_qa_01:       'SHERLOCK',
+  dev_security_01: 'AEGIS',
+  dev_docs_01:     'LORE',
+  // Marketing Team
+  mkt_research_01: 'ORACLE',
+  mkt_strategy_01: 'MAVEN',
+  mkt_content_01:  'NOVA',
+  mkt_seo_01:      'APEX',
+  mkt_social_01:   'PULSE',
+  mkt_analytics_01:'PRISM',
+};
+
 const ROLE_COLORS: Record<string, string> = {
-  // Dev team
-  planner: '#3b82f6',       // blue
-  backend: '#ef4444',        // red
-  frontend: '#22c55e',       // green
-  research: '#10b981',       // emerald green
-  devops: '#f59e0b',         // amber
-  qa: '#a855f7',             // purple
-  architect: '#06b6d4',      // cyan
-  // Marketing team
-  strategy: '#6366f1',       // indigo
-  copywriter: '#ec4899',     // pink
-  designer: '#f97316',       // orange
-  analyst: '#14b8a6',        // teal
-  social: '#8b5cf6',         // violet
-  seo: '#84cc16',            // lime
+  // Dev team — tons frios
+  planner:    '#3b82f6',   // blue  — ATLAS
+  frontend:   '#22c55e',   // green — PIXEL
+  backend:    '#ef4444',   // red   — FORGE
+  qa:         '#a855f7',   // purple — SHERLOCK
+  security:   '#f59e0b',   // amber — AEGIS
+  docs:       '#06b6d4',   // cyan  — LORE
+  // Marketing team — tons quentes/vibrantes
+  research:   '#10b981',   // emerald — ORACLE
+  strategy:   '#6366f1',   // indigo  — MAVEN
+  content:    '#ec4899',   // pink    — NOVA
+  seo:        '#84cc16',   // lime    — APEX
+  social:     '#8b5cf6',   // violet  — PULSE
+  analytics:  '#14b8a6',   // teal    — PRISM
   // Orchestrators
-  orchestrator: '#fbbf24',   // yellow
-  manager: '#fbbf24',
+  orchestrator: '#fbbf24', // yellow
+  manager:      '#fbbf24',
 };
 
 // Default positions — matches new 1440x810 canvas layout
@@ -95,6 +115,85 @@ function getDefaultPosition(
 
 let agentIndexByTeam: Record<string, number> = { dev: 0, marketing: 0, orchestrator: 0 };
 
+function resolveEventTeam(event: Record<string, unknown>): 'dev' | 'marketing' | 'orchestrator' {
+  const role = String(event.agent_role || event.role || '').toLowerCase();
+  const rawTeam = String(event.team || 'dev').toLowerCase();
+
+  if (role.includes('orchestrator') || role.includes('manager')) {
+    return 'orchestrator';
+  }
+  if (rawTeam === 'marketing') {
+    return 'marketing';
+  }
+  return 'dev';
+}
+
+function ensureAgent(
+  agents: Record<string, Agent>,
+  event: Record<string, unknown>
+): string | undefined {
+  const agentId = (event.agent_id || event.id) as string | undefined;
+  if (!agentId) return undefined;
+
+  const role = String(event.agent_role || event.role || 'worker');
+  const effectiveTeam = resolveEventTeam(event);
+  const uiTeam: 'dev' | 'marketing' = effectiveTeam === 'orchestrator' ? 'dev' : effectiveTeam;
+  const existing = agents[agentId];
+
+  if (existing) {
+    return agentId;
+  }
+
+  const idx = agentIndexByTeam[effectiveTeam] ?? 0;
+  agentIndexByTeam[effectiveTeam] = idx + 1;
+
+  agents[agentId] = {
+    agent_id: agentId,
+    agent_name:
+      (event.agent_name as string | undefined) ||
+      AGENT_CODENAMES[agentId] ||
+      role.split(' ')[0].toUpperCase(),
+    agent_role: role,
+    team: uiTeam,
+    status: 'idle',
+    current_task_id: null,
+    position:
+      (event.position as { x: number; y: number } | undefined) ||
+      getDefaultPosition(effectiveTeam, idx),
+    color: getRoleColor(role),
+  };
+
+  return agentId;
+}
+
+function ensureTask(
+  tasks: Record<string, Task>,
+  event: Record<string, unknown>
+): string | undefined {
+  const taskId = event.task_id as string | undefined;
+  if (!taskId) return undefined;
+
+  if (!tasks[taskId]) {
+    const payload = (event.payload as Record<string, unknown> | undefined) || {};
+    tasks[taskId] = {
+      task_id: taskId,
+      team: String(event.team || 'dev'),
+      status: 'pending',
+      request: String(
+        event.request ||
+        event.description ||
+        payload.request ||
+        payload.subtask_title ||
+        payload.description ||
+        'Task in progress'
+      ),
+      assigned_agent_id: null,
+    };
+  }
+
+  return taskId;
+}
+
 export const useOfficeStore = create<OfficeStore>((set, get) => ({
   agents: {},
   tasks: {},
@@ -104,38 +203,41 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
   setConnected: (v) => set({ connected: v }),
 
   processEvent: (event) => {
-    const eventType = event.event_type as string;
-    const agentId = (event.agent_id || event.id) as string | undefined;
+    const eventType = String(event.event_type || '');
 
     set((state) => {
       const newAgents = { ...state.agents };
       const newTasks = { ...state.tasks };
       const newQueue = [...state.animationQueue];
+      const agentId = ensureAgent(newAgents, event);
+      const taskId = ensureTask(newTasks, event);
 
       switch (eventType) {
         case 'agent_registered':
         case 'agent_created': {
-          const role = (event.agent_role || event.role || 'worker') as string;
-          const team = (event.team || 'dev') as 'dev' | 'marketing';
-          const lowerRole = role.toLowerCase();
-          const effectiveTeam: 'dev' | 'marketing' | 'orchestrator' =
-            lowerRole.includes('orchestrator') || lowerRole.includes('manager')
-              ? 'orchestrator'
-              : team;
+          break;
+        }
 
-          const idx = agentIndexByTeam[effectiveTeam] ?? 0;
-          agentIndexByTeam[effectiveTeam] = idx + 1;
+        case 'agent_called':
+        case 'agent_thinking': {
+          if (agentId && newAgents[agentId]) {
+            newAgents[agentId] = {
+              ...newAgents[agentId],
+              status: 'thinking',
+              current_task_id: (event.task_id as string | null) ?? newAgents[agentId].current_task_id,
+            };
+          }
+          break;
+        }
 
-          newAgents[agentId!] = {
-            agent_id: agentId!,
-            agent_role: role,
-            team: effectiveTeam === 'orchestrator' ? 'dev' : effectiveTeam,
-            status: 'idle',
-            current_task_id: null,
-            position: (event.position as { x: number; y: number }) ||
-              getDefaultPosition(effectiveTeam, idx),
-            color: getRoleColor(role),
-          };
+        case 'agent_idle': {
+          if (agentId && newAgents[agentId]) {
+            newAgents[agentId] = {
+              ...newAgents[agentId],
+              status: 'idle',
+              current_task_id: null,
+            };
+          }
           break;
         }
 
@@ -153,6 +255,7 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
           break;
         }
 
+        case 'agent_moving':
         case 'agent_moved': {
           if (agentId && newAgents[agentId]) {
             const pos = event.position as { x: number; y: number };
@@ -166,23 +269,24 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
         }
 
         case 'task_created': {
-          const taskId = event.task_id as string;
-          newTasks[taskId] = {
-            task_id: taskId,
-            team: (event.team || 'dev') as string,
-            status: 'pending',
-            request: (event.request || event.description || '') as string,
-            assigned_agent_id: null,
-          };
+          if (taskId) {
+            newTasks[taskId] = {
+              ...newTasks[taskId],
+              status: 'pending',
+              request: String(event.request || event.description || newTasks[taskId].request),
+            };
+          }
           break;
         }
 
+        case 'agent_assigned':
         case 'task_assigned': {
-          const taskId = event.task_id as string;
-          if (newTasks[taskId]) {
+          if (taskId && newTasks[taskId]) {
+            const payload = (event.payload as Record<string, unknown> | undefined) || {};
             newTasks[taskId] = {
               ...newTasks[taskId],
               status: 'assigned',
+              request: String(payload.subtask_title || newTasks[taskId].request),
               assigned_agent_id: agentId || null,
             };
           }
@@ -190,34 +294,61 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
             newAgents[agentId] = {
               ...newAgents[agentId],
               status: 'working',
-              current_task_id: taskId,
+              current_task_id: taskId ?? newAgents[agentId].current_task_id,
             };
           }
           break;
         }
 
-        case 'task_started': {
-          const taskId = event.task_id as string;
-          if (newTasks[taskId]) {
-            newTasks[taskId] = { ...newTasks[taskId], status: 'in_progress' };
+        case 'task_started':
+        case 'task_in_progress': {
+          if (taskId && newTasks[taskId]) {
+            const payload = (event.payload as Record<string, unknown> | undefined) || {};
+            newTasks[taskId] = {
+              ...newTasks[taskId],
+              status: 'in_progress',
+              request: String(
+                payload.subtask_title ||
+                payload.description ||
+                newTasks[taskId].request
+              ),
+            };
           }
           if (agentId && newAgents[agentId]) {
-            newAgents[agentId] = { ...newAgents[agentId], status: 'working' };
-          }
-          break;
-        }
-
-        case 'agent_thinking': {
-          if (agentId && newAgents[agentId]) {
-            newAgents[agentId] = { ...newAgents[agentId], status: 'thinking' };
+            newAgents[agentId] = {
+              ...newAgents[agentId],
+              status: 'working',
+              current_task_id: taskId ?? newAgents[agentId].current_task_id,
+            };
           }
           break;
         }
 
         case 'task_completed': {
-          const taskId = event.task_id as string;
-          if (newTasks[taskId]) {
-            newTasks[taskId] = { ...newTasks[taskId], status: 'completed' };
+          const payload = (event.payload as Record<string, unknown> | undefined) || {};
+          const isFinalTaskEvent =
+            typeof payload.output_length === 'number' ||
+            typeof payload.subtask_count === 'number';
+
+          if (taskId && newTasks[taskId]) {
+            newTasks[taskId] = {
+              ...newTasks[taskId],
+              status: isFinalTaskEvent ? 'completed' : 'in_progress',
+            };
+          }
+          if (agentId && newAgents[agentId]) {
+            newAgents[agentId] = {
+              ...newAgents[agentId],
+              status: isFinalTaskEvent ? 'idle' : newAgents[agentId].status,
+              current_task_id: isFinalTaskEvent ? null : newAgents[agentId].current_task_id,
+            };
+          }
+          break;
+        }
+
+        case 'task_failed': {
+          if (taskId && newTasks[taskId]) {
+            newTasks[taskId] = { ...newTasks[taskId], status: 'failed' };
           }
           if (agentId && newAgents[agentId]) {
             newAgents[agentId] = {
@@ -225,17 +356,6 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
               status: 'idle',
               current_task_id: null,
             };
-          }
-          break;
-        }
-
-        case 'task_failed': {
-          const taskId = event.task_id as string;
-          if (newTasks[taskId]) {
-            newTasks[taskId] = { ...newTasks[taskId], status: 'failed' };
-          }
-          if (agentId && newAgents[agentId]) {
-            newAgents[agentId] = { ...newAgents[agentId], status: 'idle' };
           }
           break;
         }

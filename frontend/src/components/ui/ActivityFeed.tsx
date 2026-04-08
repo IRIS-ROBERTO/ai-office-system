@@ -20,6 +20,7 @@ function eventToItem(payload: Record<string, unknown>): FeedItem | null {
   const type = (payload.event_type as string) || '';
   const agentId  = ((payload.agent_id  || payload.id)    as string | undefined)?.slice(0, 8) ?? '—';
   const role     = (payload.agent_role || payload.role    || '') as string;
+  const eventPayload = (payload.payload as Record<string, unknown> | undefined) || {};
   const taskId   = ((payload.task_id   as string) || '').slice(0, 8);
   const name     = role ? role : agentId;
 
@@ -27,11 +28,16 @@ function eventToItem(payload: Record<string, unknown>): FeedItem | null {
     agent_registered:    { msg: `"${name}" joined`,          color: '#00c8ff', icon: '▶' },
     agent_created:       { msg: `"${name}" spawned`,         color: '#00c8ff', icon: '⊕' },
     agent_status_changed:{ msg: `${name} → ${payload.status}`, color: '#64748b', icon: '◉' },
+    agent_called:        { msg: `${name} called`,             color: '#fbbf24', icon: '◎' },
+    agent_assigned:      { msg: `${name} assigned`,           color: '#6366f1', icon: '⇒' },
     agent_thinking:      { msg: `${name} thinking…`,          color: '#fbbf24', icon: '◌' },
+    agent_idle:          { msg: `${name} idle`,               color: '#64748b', icon: '·' },
+    agent_moving:        { msg: `${name} moving`,             color: '#3b82f6', icon: '⇢' },
     agent_moved:         { msg: `${name} moved`,               color: '#3b82f6', icon: '⇒' },
     task_created:        { msg: `Task created  [${taskId}…]`,  color: '#a855f7', icon: '✦' },
     task_assigned:       { msg: `Task [${taskId}…] → ${name}`, color: '#6366f1', icon: '⇒' },
     task_started:        { msg: `Task [${taskId}…] started`,   color: '#f59e0b', icon: '▷' },
+    task_in_progress:    { msg: `Task [${taskId}…] in progress`, color: '#f59e0b', icon: '⋯' },
     task_completed:      { msg: `Task [${taskId}…] done`,      color: '#00ff88', icon: '✓' },
     task_failed:         { msg: `Task [${taskId}…] failed`,    color: '#ef4444', icon: '✗' },
   };
@@ -42,7 +48,9 @@ function eventToItem(payload: Record<string, unknown>): FeedItem | null {
   return {
     id: `${Date.now()}-${Math.random()}`,
     type,
-    message: cfg.msg,
+    message: eventPayload.subtask_title
+      ? `${cfg.msg} • ${String(eventPayload.subtask_title)}`
+      : cfg.msg,
     timestamp: Date.now(),
     color: cfg.color,
     icon: cfg.icon,
