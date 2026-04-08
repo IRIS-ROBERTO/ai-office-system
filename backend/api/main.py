@@ -4,17 +4,17 @@ Entrada HTTP/WebSocket do sistema. Gerencia tarefas, agentes e saúde.
 """
 import asyncio
 import logging
-import json
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.event_bus import event_bus
-from backend.core.state import TaskState, AgentState
+from backend.core.state import TaskState
+from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamType
+from backend.core.runtime_registry import agent_registry, seed_agent_registry
 from backend.config.settings import settings
 from backend.tools.ollama_tool import check_ollama_health
 from backend.orchestrator import DevOrchestrator, MarketingOrchestrator
@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 # Estado in-memory: tasks e agentes rastreados em runtime
 # ---------------------------------------------------------------------------
 _active_tasks: dict[str, TaskState] = {}
-_agent_registry: dict[str, AgentState] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +42,7 @@ _agent_registry: dict[str, AgentState] = {}
 async def lifespan(app: FastAPI):
     """Conecta EventBus + Redis no startup; desconecta no shutdown."""
     logger.info("[Lifespan] Iniciando AI Office System...")
+    seed_agent_registry()
     try:
         await event_bus.connect()
         logger.info("[Lifespan] EventBus conectado.")
@@ -98,6 +98,33 @@ def _make_task_state(task_id: str, team: str, request: str, priority: int) -> Ta
     )
 
 
+def _make_progress_callback(task_id: str):
+    """Returns a callback that updates _active_tasks with intermediate state."""
+    def _on_progress(intermediate_state):
+        if task_id in _active_tasks:
+            # Merge only the fields that changed
+            for key in ("senior_directive", "subtasks", "current_subtask_index",
+                        "agent_outputs", "quality_approved", "final_output"):
+                if key in intermediate_state and intermediate_state[key]:
+                    _active_tasks[task_id][key] = intermediate_state[key]
+    return _on_progress
+
+
+async def _emit_task_created(task_id: str, team: TeamType, request: str, priority: int) -> None:
+    event = OfficialEvent(
+        event_type=EventType.TASK_CREATED,
+        team=team,
+        agent_id="orchestrator_senior_01",
+        agent_role=AgentRole.ORCHESTRATOR,
+        task_id=task_id,
+        payload={"request": request, "priority": priority},
+    )
+    try:
+        await event_bus.emit(event)
+    except Exception as exc:
+        logger.warning("[API] Falha ao emitir TASK_CREATED para %s: %s", task_id, exc)
+
+
 async def _run_dev_task(task_id: str, request: str, priority: int):
     """Background task: executa o DevOrchestrator para a tarefa."""
     state = _active_tasks.get(task_id)
@@ -106,10 +133,12 @@ async def _run_dev_task(task_id: str, request: str, priority: int):
         return
     try:
         orchestrator = DevOrchestrator()
-        result = await orchestrator.run(state)
-        if result:
-            _active_tasks[task_id] = result
-        logger.info(f"[DevTask] Task {task_id} concluída.")
+        final_state = await orchestrator.run(
+            state, on_progress=_make_progress_callback(task_id)
+        )
+        _active_tasks[task_id] = final_state
+        logger.info(f"[DevTask] Task {task_id} concluída. "
+                    f"Output: {len(final_state.get('final_output') or '')} chars.")
     except Exception as exc:
         logger.error(f"[DevTask] Erro na task {task_id}: {exc}", exc_info=True)
         if task_id in _active_tasks:
@@ -124,10 +153,12 @@ async def _run_marketing_task(task_id: str, request: str, priority: int):
         return
     try:
         orchestrator = MarketingOrchestrator()
-        result = await orchestrator.run(state)
-        if result:
-            _active_tasks[task_id] = result
-        logger.info(f"[MarketingTask] Task {task_id} concluída.")
+        final_state = await orchestrator.run(
+            state, on_progress=_make_progress_callback(task_id)
+        )
+        _active_tasks[task_id] = final_state
+        logger.info(f"[MarketingTask] Task {task_id} concluída. "
+                    f"Output: {len(final_state.get('final_output') or '')} chars.")
     except Exception as exc:
         logger.error(f"[MarketingTask] Erro na task {task_id}: {exc}", exc_info=True)
         if task_id in _active_tasks:
@@ -148,6 +179,7 @@ async def create_dev_task(body: TaskRequest, background_tasks: BackgroundTasks):
 
     state = _make_task_state(task_id, "dev", body.request, body.priority)
     _active_tasks[task_id] = state
+    await _emit_task_created(task_id, TeamType.DEV, body.request, body.priority)
 
     background_tasks.add_task(_run_dev_task, task_id, body.request, body.priority)
     logger.info(f"[API] Dev task criada: {task_id}")
@@ -171,6 +203,7 @@ async def create_marketing_task(body: TaskRequest, background_tasks: BackgroundT
 
     state = _make_task_state(task_id, "marketing", body.request, body.priority)
     _active_tasks[task_id] = state
+    await _emit_task_created(task_id, TeamType.MARKETING, body.request, body.priority)
 
     background_tasks.add_task(_run_marketing_task, task_id, body.request, body.priority)
     logger.info(f"[API] Marketing task criada: {task_id}")
@@ -201,6 +234,7 @@ async def list_agents():
     Retorna a lista de todos os agentes registrados e seus estados atuais.
     O registro é populado pelos próprios agentes ao serem instanciados/atualizados.
     """
+    seed_agent_registry()
     return [
         AgentStatus(
             agent_id=agent["agent_id"],
@@ -210,7 +244,7 @@ async def list_agents():
             current_task_id=agent.get("current_task_id"),
             completed_tasks=agent.get("completed_tasks", 0),
         )
-        for agent in _agent_registry.values()
+        for agent in sorted(agent_registry.values(), key=lambda item: (item["team"], item["agent_role"]))
     ]
 
 
@@ -234,7 +268,11 @@ async def health_check():
     # Ollama
     ollama_info = await check_ollama_health()
     ollama_status = ollama_info.get("status", "offline")
-    available_models: list[str] = ollama_info.get("models", [])
+    # models pode ser list[dict] ({"name":..,"size_gb":..}) ou list[str]
+    raw_models = ollama_info.get("models", [])
+    available_models: list[str] = [
+        m["name"] if isinstance(m, dict) else str(m) for m in raw_models
+    ]
 
     active_tasks_count = len(_active_tasks)
 
