@@ -1,13 +1,8 @@
 @echo off
 chcp 65001 >nul 2>&1
-title IRIS — AI Office System
+title IRIS - AI Office System
 
-:: ============================================================
-::  IRIS.bat  —  Lançador da Plataforma AI Office System
-::  Equipe Dev + Marketing com agentes locais e LLMs livres
-:: ============================================================
-
-setlocal EnableDelayedExpansion
+setlocal EnableExtensions DisableDelayedExpansion
 
 set "ROOT=%~dp0"
 set "VENV=%ROOT%.venv\Scripts"
@@ -15,14 +10,28 @@ set "FRONTEND=%ROOT%frontend"
 set "BACKEND_MODULE=backend.api.main:app"
 set "BACKEND_PORT=8000"
 set "FRONTEND_PORT=3000"
+set "API_URL=http://127.0.0.1:%BACKEND_PORT%"
+set "WS_URL=ws://127.0.0.1:%BACKEND_PORT%/ws"
+set "FRONTEND_URL=http://127.0.0.1:%FRONTEND_PORT%"
 
 echo.
 echo  ========================================================
-echo   IRIS — AI Office System  ^|  Iniciando...
+echo   IRIS - AI Office System ^| Boot completo
 echo  ========================================================
 echo.
 
-:: ---------- 1. Verificar .env ----------
+if not exist "%ROOT%backend" (
+    echo  [ERRO] Pasta backend nao encontrada em %ROOT%
+    pause
+    exit /b 1
+)
+
+if not exist "%ROOT%frontend" (
+    echo  [ERRO] Pasta frontend nao encontrada em %ROOT%
+    pause
+    exit /b 1
+)
+
 if not exist "%ROOT%.env" (
     echo  [ERRO] Arquivo .env nao encontrado em %ROOT%
     echo         Copie .env.example para .env e configure as chaves.
@@ -31,16 +40,15 @@ if not exist "%ROOT%.env" (
 )
 echo  [OK] .env encontrado
 
-:: ---------- 2. Verificar venv Python ----------
 if not exist "%VENV%\python.exe" (
     echo  [ERRO] Virtualenv nao encontrado em %VENV%
-    echo         Execute: python -m venv .venv  ^&^&  .venv\Scripts\pip install -r requirements.txt
+    echo         Execute: python -m venv .venv
+    echo         Depois:  .venv\Scripts\pip install -r requirements.txt
     pause
     exit /b 1
 )
 echo  [OK] Virtualenv Python detectado
 
-:: ---------- 3. Verificar Node/npm ----------
 where node >nul 2>&1
 if errorlevel 1 (
     echo  [ERRO] Node.js nao encontrado no PATH
@@ -50,25 +58,68 @@ if errorlevel 1 (
 )
 echo  [OK] Node.js detectado
 
-:: ---------- 4. Instalar deps frontend se necessario ----------
-if not exist "%FRONTEND%\node_modules\react" (
-    echo  [SETUP] Instalando dependencias do frontend...
-    cd /d "%FRONTEND%"
-    call npm install --silent
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo  [ERRO] npm nao encontrado no PATH
+    pause
+    exit /b 1
+)
+echo  [OK] npm detectado
+
+echo  [CHECK] Validando dependencias Python do backend...
+"%VENV%\python.exe" -c "import fastapi, uvicorn" >nul 2>&1
+if errorlevel 1 (
+    echo  [SETUP] Instalando dependencias Python...
+    call "%VENV%\pip.exe" install -r "%ROOT%requirements.txt"
     if errorlevel 1 (
-        echo  [ERRO] Falha ao instalar deps do frontend
+        echo  [ERRO] Falha ao instalar dependencias Python
         pause
         exit /b 1
     )
-    cd /d "%ROOT%"
 )
-echo  [OK] Dependencias frontend prontas
+echo  [OK] Backend Python pronto
 
-:: ---------- 5. Iniciar Redis ----------
+if not exist "%FRONTEND%\node_modules\vite" (
+    echo  [SETUP] Instalando dependencias do frontend...
+    pushd "%FRONTEND%"
+    call npm install
+    if errorlevel 1 (
+        popd
+        echo  [ERRO] Falha ao instalar dependencias do frontend
+        pause
+        exit /b 1
+    )
+    popd
+)
+echo  [OK] Frontend pronto
+
+where ollama >nul 2>&1
+if errorlevel 1 (
+    echo  [AVISO] Ollama nao encontrado no PATH. O sistema ainda sobe, mas usara o fallback configurado.
+)
+if not errorlevel 1 (
+    ollama list >nul 2>&1
+    if errorlevel 1 (
+        echo  [AVISO] Ollama instalado, mas o daemon nao respondeu.
+    ) else (
+        echo  [OK] Ollama detectado
+    )
+)
+
+echo.
+echo  [CLEANUP] Encerrando janelas IRIS antigas...
+taskkill /F /FI "WindowTitle eq IRIS-Backend*" >nul 2>&1
+taskkill /F /FI "WindowTitle eq IRIS-Frontend*" >nul 2>&1
+taskkill /F /FI "WindowTitle eq IRIS-Redis*" >nul 2>&1
+
+echo  [PORTAS] Verificando portas %BACKEND_PORT% e %FRONTEND_PORT%...
+call :EnsurePortFree %BACKEND_PORT%
+if errorlevel 1 exit /b 1
+call :EnsurePortFree %FRONTEND_PORT%
+if errorlevel 1 exit /b 1
+
 echo.
 echo  [REDIS] Tentando iniciar Redis...
-
-:: Tenta Docker primeiro
 docker info >nul 2>&1
 if not errorlevel 1 (
     echo  [REDIS] Usando Docker...
@@ -80,12 +131,11 @@ if not errorlevel 1 (
             goto TryWSL
         )
     )
-    echo  [OK] Redis rodando via Docker ^(iris-redis^)
+    echo  [OK] Redis rodando via Docker (iris-redis)
     goto RedisOK
 )
 
 :TryWSL
-:: Tenta WSL como fallback
 wsl --list >nul 2>&1
 if not errorlevel 1 (
     echo  [REDIS] Tentando WSL...
@@ -98,7 +148,6 @@ if not errorlevel 1 (
     )
 )
 
-:: Tenta Redis Windows nativo (Memurai ou redis-server.exe no PATH)
 where redis-server >nul 2>&1
 if not errorlevel 1 (
     echo  [REDIS] Usando redis-server nativo do PATH...
@@ -108,59 +157,84 @@ if not errorlevel 1 (
     goto RedisOK
 )
 
-echo  [AVISO] Redis nao detectado. O sistema rodara sem cache/eventos em tempo real.
-echo          Para instalar: https://github.com/microsoftarchive/redis/releases
-echo          Ou habilite Docker Desktop e tente novamente.
-echo.
-echo          Pressione ENTER para continuar so com backend+frontend, ou CTRL+C para cancelar.
-pause >nul
+echo  [AVISO] Redis nao detectado. O backend sobe mesmo assim com o fallback configurado.
+echo          Para tempo real completo, use Docker Desktop, WSL ou redis-server no PATH.
 
 :RedisOK
 
-:: ---------- 6. Iniciar Backend FastAPI ----------
 echo.
-echo  [BACKEND] Iniciando FastAPI na porta %BACKEND_PORT%...
-start "IRIS-Backend" /min cmd /c ""%VENV%\python.exe" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info && pause"
-timeout /t 3 /nobreak >nul
-echo  [OK] Backend iniciado
+echo  [BACKEND] Iniciando FastAPI em %API_URL%...
+start "IRIS-Backend" /min cmd /c "cd /d \"%ROOT%\" && \"%VENV%\python.exe\" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info"
+call :WaitForHttp "%API_URL%/health" 45
+if errorlevel 1 (
+    echo  [ERRO] Backend nao respondeu em %API_URL%/health
+    echo         Verifique a janela IRIS-Backend.
+    pause
+    exit /b 1
+)
+echo  [OK] Backend respondeu ao health check
 
-:: ---------- 7. Iniciar Frontend Vite ----------
-echo  [FRONTEND] Iniciando Vite na porta %FRONTEND_PORT%...
-cd /d "%FRONTEND%"
-start "IRIS-Frontend" /min cmd /c "npm run dev && pause"
-cd /d "%ROOT%"
-timeout /t 4 /nobreak >nul
-echo  [OK] Frontend iniciado
+echo.
+echo  [FRONTEND] Iniciando Vite em %FRONTEND_URL%...
+start "IRIS-Frontend" /min cmd /c "cd /d \"%FRONTEND%\" && set \"VITE_API_URL=%API_URL%\" && set \"VITE_WS_URL=%WS_URL%\" && npm run dev"
+call :WaitForHttp "%FRONTEND_URL%" 45
+if errorlevel 1 (
+    echo  [ERRO] Frontend nao respondeu em %FRONTEND_URL%
+    echo         Verifique a janela IRIS-Frontend.
+    pause
+    exit /b 1
+)
+echo  [OK] Frontend respondeu
 
-:: ---------- 8. Abrir no navegador ----------
 echo.
 echo  [IRIS] Abrindo interface...
-timeout /t 2 /nobreak >nul
-start "" "http://localhost:%FRONTEND_PORT%"
+start "" "%FRONTEND_URL%"
 
-:: ---------- 9. Painel de status ----------
 echo.
 echo  ========================================================
-echo   IRIS esta rodando!
+echo   IRIS esta rodando
 echo.
-echo   Interface:  http://localhost:%FRONTEND_PORT%
-echo   API Docs:   http://localhost:%BACKEND_PORT%/docs
-echo   WebSocket:  ws://localhost:%BACKEND_PORT%/ws
+echo   Interface:  %FRONTEND_URL%
+echo   API Docs:   %API_URL%/docs
+echo   Health:     %API_URL%/health
+echo   WebSocket:  %WS_URL%
 echo.
 echo   Logs:
-echo     Backend  →  janela "IRIS-Backend"
-echo     Frontend →  janela "IRIS-Frontend"
+echo     Backend  - janela "IRIS-Backend"
+echo     Frontend - janela "IRIS-Frontend"
 echo.
 echo   Pressione qualquer tecla para ENCERRAR tudo.
 echo  ========================================================
 echo.
 pause >nul
 
-:: ---------- 10. Encerrar todos os processos ----------
 echo  [IRIS] Encerrando servicos...
 taskkill /F /FI "WindowTitle eq IRIS-Backend*" >nul 2>&1
 taskkill /F /FI "WindowTitle eq IRIS-Frontend*" >nul 2>&1
 taskkill /F /FI "WindowTitle eq IRIS-Redis*" >nul 2>&1
-echo  [OK] Servicos encerrados. Ate logo!
-timeout /t 2 /nobreak >nul
+echo  [OK] Servicos encerrados.
+timeout /t 1 /nobreak >nul
 exit /b 0
+
+:EnsurePortFree
+set "PORT=%~1"
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
+    echo  [ERRO] A porta %PORT% ja esta em uso pelo PID %%P
+    echo         Encerre o processo ou troque a porta antes de iniciar o IRIS.
+    pause
+    exit /b 1
+)
+exit /b 0
+
+:WaitForHttp
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$deadline = (Get-Date).AddSeconds(%~2);" ^
+  "while ((Get-Date) -lt $deadline) {" ^
+  "  try {" ^
+  "    $response = Invoke-WebRequest -Uri '%~1' -UseBasicParsing -TimeoutSec 3;" ^
+  "    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 }" ^
+  "  } catch { }" ^
+  "  Start-Sleep -Seconds 1" ^
+  "}" ^
+  "exit 1"
+exit /b %errorlevel%
