@@ -7,9 +7,13 @@ setlocal EnableExtensions DisableDelayedExpansion
 set "ROOT=%~dp0"
 set "VENV=%ROOT%.venv\Scripts"
 set "FRONTEND=%ROOT%frontend"
+set "FRONTEND_ENV_FILE=%FRONTEND%\.env.local"
+set "COMPOSE_FILE=%ROOT%docker-compose.yml"
 set "BACKEND_MODULE=backend.api.main:app"
 set "BACKEND_PORT=8000"
 set "FRONTEND_PORT=3000"
+set "REDIS_PORT=6379"
+set "REDIS_CONTAINER_NAME=ai-office-redis"
 set "API_URL=http://127.0.0.1:%BACKEND_PORT%"
 set "WS_URL=ws://127.0.0.1:%BACKEND_PORT%/ws"
 set "FRONTEND_URL=http://127.0.0.1:%FRONTEND_PORT%"
@@ -118,20 +122,51 @@ if errorlevel 1 exit /b 1
 call :EnsurePortFree %FRONTEND_PORT%
 if errorlevel 1 exit /b 1
 
+echo  [CONFIG] Gerando %FRONTEND_ENV_FILE%...
+(
+    echo VITE_API_URL=%API_URL%
+    echo VITE_WS_URL=%WS_URL%
+) > "%FRONTEND_ENV_FILE%"
+if errorlevel 1 (
+    echo  [ERRO] Nao foi possivel gerar %FRONTEND_ENV_FILE%
+    pause
+    exit /b 1
+)
+echo  [OK] Frontend configurado para apontar ao backend local
+
 echo.
 echo  [REDIS] Tentando iniciar Redis...
+call :IsPortListening %REDIS_PORT%
+if not errorlevel 1 (
+    echo  [OK] Porta %REDIS_PORT% ja esta em uso. Assumindo Redis ativo.
+    goto RedisOK
+)
+
 docker info >nul 2>&1
 if not errorlevel 1 (
-    echo  [REDIS] Usando Docker...
-    docker start iris-redis >nul 2>&1
+    if exist "%COMPOSE_FILE%" (
+        echo  [REDIS] Usando docker compose...
+        docker compose -f "%COMPOSE_FILE%" up -d redis >nul 2>&1
+        if not errorlevel 1 (
+            echo  [OK] Redis iniciado via docker compose (%REDIS_CONTAINER_NAME%)
+            goto RedisOK
+        )
+        echo  [AVISO] docker compose nao conseguiu subir o servico redis
+    )
+
+    echo  [REDIS] Tentando container Docker dedicado...
+    docker start %REDIS_CONTAINER_NAME% >nul 2>&1
     if errorlevel 1 (
-        docker run -d --name iris-redis -p 6379:6379 --restart unless-stopped redis:7-alpine >nul 2>&1
+        docker start iris-redis >nul 2>&1
+    )
+    if errorlevel 1 (
+        docker run -d --name %REDIS_CONTAINER_NAME% -p %REDIS_PORT%:%REDIS_PORT% --restart unless-stopped redis:7-alpine >nul 2>&1
         if errorlevel 1 (
             echo  [AVISO] Falha ao iniciar Redis via Docker
             goto TryWSL
         )
     )
-    echo  [OK] Redis rodando via Docker (iris-redis)
+    echo  [OK] Redis rodando via Docker
     goto RedisOK
 )
 
@@ -164,7 +199,7 @@ echo          Para tempo real completo, use Docker Desktop, WSL ou redis-server 
 
 echo.
 echo  [BACKEND] Iniciando FastAPI em %API_URL%...
-start "IRIS-Backend" /min cmd /c "cd /d \"%ROOT%\" && \"%VENV%\python.exe\" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info"
+start "IRIS-Backend" /min cmd /c "cd /d \"%ROOT%\" && set \"REDIS_URL=redis://127.0.0.1:%REDIS_PORT%\" && \"%VENV%\python.exe\" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info"
 call :WaitForHttp "%API_URL%/health" 45
 if errorlevel 1 (
     echo  [ERRO] Backend nao respondeu em %API_URL%/health
@@ -225,6 +260,13 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"')
     exit /b 1
 )
 exit /b 0
+
+:IsPortListening
+set "PORT=%~1"
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
+    exit /b 0
+)
+exit /b 1
 
 :WaitForHttp
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
