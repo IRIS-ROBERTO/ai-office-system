@@ -104,8 +104,8 @@ def _make_progress_callback(task_id: str):
         if task_id in _active_tasks:
             # Merge only the fields that changed
             for key in ("senior_directive", "subtasks", "current_subtask_index",
-                        "agent_outputs", "quality_approved", "final_output"):
-                if key in intermediate_state and intermediate_state[key]:
+                        "agent_outputs", "quality_approved", "final_output", "errors"):
+                if key in intermediate_state and intermediate_state[key] is not None:
                     _active_tasks[task_id][key] = intermediate_state[key]
     return _on_progress
 

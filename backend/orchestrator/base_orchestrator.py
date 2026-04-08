@@ -8,6 +8,7 @@ and frontend receive real-time state updates.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -200,10 +201,41 @@ class BaseOrchestrator(ABC):
             {"role": "user", "content": state["original_request"]},
         ]
 
-        try:
-            response = await self._llm.ainvoke(messages)
-            raw_content: str = response.content if hasattr(response, "content") else str(response)
+        # Retry logic: on RateLimitError fall back to local Ollama automatically
+        from backend.tools.ollama_tool import get_local_llm
+        from backend.config.settings import settings as _settings
+        _llm_candidates = [self._llm]
+        # Always have a local fallback available
+        _llm_candidates.append(get_local_llm(model=_settings.LOCAL_MODEL_CODE, temperature=0.2))
+        _llm_candidates.append(get_local_llm(model=_settings.LOCAL_MODEL_FALLBACK, temperature=0.2))
 
+        raw_content: str = ""
+        last_exc: Exception | None = None
+
+        for _llm_attempt in _llm_candidates:
+            try:
+                response = await _llm_attempt.ainvoke(messages)
+                raw_content = response.content if hasattr(response, "content") else str(response)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc).lower()
+                if "429" in err_str or "rate" in err_str or "quota" in err_str:
+                    logger.warning(
+                        "[%s] RateLimit/Quota em %s — tentando proximo modelo. Erro: %s",
+                        orch_id, getattr(_llm_attempt, 'model', '?'), exc
+                    )
+                    continue
+                # Non-rate-limit error — don't retry
+                logger.error("[%s] Erro nao-RateLimit no LLM: %s", orch_id, exc)
+                break
+
+        if last_exc and not raw_content:
+            logger.error(f"[{orch_id}] Todos os LLMs falharam: {last_exc}")
+            raw_content = ""
+
+        try:
             # Strip markdown code fences if present
             cleaned = raw_content.strip()
             if cleaned.startswith("```"):
@@ -217,13 +249,17 @@ class BaseOrchestrator(ABC):
             # Ensure every subtask has a unique id
             subtasks: list[dict] = []
             for st in raw_subtasks:
+                # acceptance_criteria pode vir como lista do LLM → normalizar para string
+                ac = st.get("acceptance_criteria", "")
+                if isinstance(ac, list):
+                    ac = "\n".join(f"- {item}" for item in ac)
                 subtasks.append(
                     {
                         "id": st.get("id") or str(uuid.uuid4()),
                         "title": st.get("title", "Subtarefa"),
                         "description": st.get("description", ""),
                         "assigned_role": st.get("assigned_role", ""),
-                        "acceptance_criteria": st.get("acceptance_criteria", ""),
+                        "acceptance_criteria": str(ac),
                     }
                 )
 
@@ -231,21 +267,21 @@ class BaseOrchestrator(ABC):
                 f"[{orch_id}] Senior planning concluído: {len(subtasks)} subtarefas geradas."
             )
 
-        except (json.JSONDecodeError, KeyError) as exc:
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
             logger.error(f"[{orch_id}] Falha ao parsear resposta do Senior LLM: {exc}")
-            logger.debug(f"Raw response: {raw_content if 'raw_content' in dir() else 'N/A'}")
-            senior_directive = "Executar a requisição com qualidade máxima."
+            logger.debug(f"Raw response: {raw_content[:200]}")
+            senior_directive = "Executar a requisição com qualidade máxima e atenção aos detalhes."
             subtasks = [
                 {
                     "id": str(uuid.uuid4()),
                     "title": "Executar requisição completa",
                     "description": state["original_request"],
                     "assigned_role": self._default_role(),
-                    "acceptance_criteria": "Entregável completo e funcional",
+                    "acceptance_criteria": "Entregável completo e funcional conforme requisição",
                 }
             ]
 
-        return {
+        result = {
             "senior_directive": senior_directive,
             "subtasks": subtasks,
             "current_subtask_index": 0,
@@ -254,6 +290,10 @@ class BaseOrchestrator(ABC):
                 AIMessage(content=senior_directive),
             ],
         }
+        # Merge and report intermediate progress
+        merged = {**state, **result}
+        self._report_progress(merged)
+        return result
 
     # ------------------------------------------------------------------
     # LangGraph node: route_to_agent_node
@@ -366,14 +406,14 @@ class BaseOrchestrator(ABC):
         )
 
         try:
-            # Run the single-task crew synchronously (CrewAI is sync)
+            # CrewAI kickoff() é SÍNCRONO — roda em thread para não bloquear o event loop
             single_task_crew = Crew(
                 agents=[crewai_agent],
                 tasks=[crewai_task],
                 process=Process.sequential,
                 verbose=False,
             )
-            result = single_task_crew.kickoff()
+            result = await asyncio.to_thread(single_task_crew.kickoff)
             output_text: str = str(result) if result else ""
 
         except Exception as exc:
@@ -389,10 +429,14 @@ class BaseOrchestrator(ABC):
             f"Output: {output_text[:120]}..."
         )
 
-        return {
+        result = {
             "agent_outputs": updated_outputs,
-            "retry_count": 0,  # reset retry counter for fresh subtask
+            "retry_count": 0,
         }
+        # Report progress after each subtask completion
+        merged = {**state, **result}
+        self._report_progress(merged)
+        return result
 
     # ------------------------------------------------------------------
     # LangGraph node: quality_gate_node
@@ -464,9 +508,12 @@ class BaseOrchestrator(ABC):
             feedback = parsed.get("feedback", "")
 
         except Exception as exc:
-            logger.warning(f"[quality_gate] Erro ao parsear resposta LLM: {exc} — aprovação automática.")
-            approved = True
-            feedback = "Auto-aprovado (falha no parser do quality gate)."
+            logger.warning(f"[quality_gate] Erro ao parsear resposta LLM: {exc} — fallback conservador.")
+            approved = False
+            feedback = (
+                "Quality gate não conseguiu validar o output por falha de parser. "
+                "Refine o entregável e responda em JSON válido."
+            )
 
         logger.info(
             f"[quality_gate] Subtarefa '{subtask['title']}' — "
@@ -678,49 +725,50 @@ class BaseOrchestrator(ABC):
     # Public API
     # ------------------------------------------------------------------
 
-    async def run(self, request: str, team: TeamType) -> str:
+    async def run(
+        self,
+        state: TaskState,
+        on_progress: Any = None,
+    ) -> TaskState:
         """
-        Executes the full orchestration pipeline for the given request.
+        Executes the full orchestration pipeline for the given TaskState.
 
         Args:
-            request: Raw human request string.
-            team:    TeamType.DEV or TeamType.MARKETING.
+            state: Pre-built TaskState with task_id, original_request, team, etc.
+            on_progress: Optional callback(state) invoked after each LangGraph
+                         node with current intermediate state for real-time
+                         status updates to the API layer.
 
         Returns:
-            The final aggregated output string.
+            Final TaskState with senior_directive, subtasks, agent_outputs, final_output.
         """
-        task_id = str(uuid.uuid4())
-
-        initial_state: TaskState = {
-            "task_id": task_id,
-            "team": team.value,
-            "original_request": request,
-            "senior_directive": None,
-            "subtasks": [],
-            "current_subtask_index": 0,
-            "agent_outputs": {},
-            "quality_approved": False,
-            "retry_count": 0,
-            "final_output": None,
-            "errors": [],
-            "messages": [],
-        }
+        task_id = state["task_id"]
+        team_label = state.get("team", self.team.value)
+        self._on_progress = on_progress
 
         logger.info(
-            f"[Orchestrator:{team.value}] Iniciando tarefa {task_id}: "
-            f"'{request[:80]}...'"
+            "[Orchestrator:%s] Iniciando tarefa %s: '%s...'",
+            team_label, task_id, state["original_request"][:80],
         )
 
         config = {"configurable": {"thread_id": task_id}}
+        final_state: TaskState = await self._graph.ainvoke(state, config=config)
 
-        final_state = await self._graph.ainvoke(initial_state, config=config)
-
-        result: str = final_state.get("final_output") or ""
+        output_len = len(final_state.get("final_output") or "")
         logger.info(
-            f"[Orchestrator:{team.value}] Tarefa {task_id} finalizada. "
-            f"Output: {len(result)} chars."
+            "[Orchestrator:%s] Tarefa %s finalizada. Output: %d chars.",
+            team_label, task_id, output_len,
         )
-        return result
+        return final_state
+
+    def _report_progress(self, state: TaskState) -> None:
+        """Report intermediate progress to API layer via callback."""
+        cb = getattr(self, "_on_progress", None)
+        if cb is not None:
+            try:
+                cb(state)
+            except Exception as exc:
+                logger.debug("Progress callback error: %s", exc)
 
     # ------------------------------------------------------------------
     # Helpers for subclasses
