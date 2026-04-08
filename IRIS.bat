@@ -126,11 +126,15 @@ taskkill /F /FI "WindowTitle eq IRIS-Backend*" >nul 2>&1
 taskkill /F /FI "WindowTitle eq IRIS-Frontend*" >nul 2>&1
 taskkill /F /FI "WindowTitle eq IRIS-Redis*" >nul 2>&1
 
-echo  [PORTAS] Verificando portas %BACKEND_PORT% e %FRONTEND_PORT%...
-call :EnsurePortFree %BACKEND_PORT%
+echo  [PORTAS] Validando portas preferenciais %BACKEND_PORT% e %FRONTEND_PORT%...
+call :ResolveBackendPort
 if errorlevel 1 exit /b 1
-call :EnsurePortFree %FRONTEND_PORT%
+call :ResolveFrontendPort
 if errorlevel 1 exit /b 1
+set "API_URL=http://127.0.0.1:%BACKEND_PORT%"
+set "WS_URL=ws://127.0.0.1:%BACKEND_PORT%/ws"
+set "FRONTEND_URL=http://127.0.0.1:%FRONTEND_PORT%"
+echo  [OK] Backend usara %BACKEND_PORT% e frontend usara %FRONTEND_PORT%
 
 echo  [CONFIG] Gerando %FRONTEND_ENV_FILE%...
 (
@@ -229,7 +233,7 @@ if errorlevel 1 (
 
 echo.
 echo  [FRONTEND] Iniciando Vite em %FRONTEND_URL%...
-start "IRIS-Frontend" /min cmd /k "cd /d \"%FRONTEND%\" && set \"VITE_API_URL=%API_URL%\" && set \"VITE_WS_URL=%WS_URL%\" && npm run dev >> \"%FRONTEND_LOG%\" 2>&1"
+start "IRIS-Frontend" /min cmd /k "cd /d \"%FRONTEND%\" && set \"VITE_API_URL=%API_URL%\" && set \"VITE_WS_URL=%WS_URL%\" && npm run dev -- --port %FRONTEND_PORT% >> \"%FRONTEND_LOG%\" 2>&1"
 call :WaitForHttp "%FRONTEND_URL%" 45
 if errorlevel 1 (
     echo  [ERRO] Frontend nao respondeu em %FRONTEND_URL%
@@ -274,9 +278,6 @@ exit /b 0
 :EnsurePortFree
 set "PORT=%~1"
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
-    echo  [ERRO] A porta %PORT% ja esta em uso pelo PID %%P
-    echo         Encerre o processo ou troque a porta antes de iniciar o IRIS.
-    pause
     exit /b 1
 )
 exit /b 0
@@ -286,6 +287,38 @@ set "PORT=%~1"
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
     exit /b 0
 )
+exit /b 1
+
+:ResolveBackendPort
+call :EnsurePortFree %BACKEND_PORT%
+if not errorlevel 1 exit /b 0
+
+echo  [AVISO] A porta %BACKEND_PORT% esta ocupada. Procurando backend limpo...
+for %%P in (8011 8012 8013 8014 8015) do (
+    call :EnsurePortFree %%P
+    if not errorlevel 1 (
+        set "BACKEND_PORT=%%P"
+        exit /b 0
+    )
+)
+echo  [ERRO] Nenhuma porta livre encontrada para o backend.
+pause
+exit /b 1
+
+:ResolveFrontendPort
+call :EnsurePortFree %FRONTEND_PORT%
+if not errorlevel 1 exit /b 0
+
+echo  [AVISO] A porta %FRONTEND_PORT% esta ocupada. Procurando frontend limpo...
+for %%P in (3001 3002 3003 3004 3005) do (
+    call :EnsurePortFree %%P
+    if not errorlevel 1 (
+        set "FRONTEND_PORT=%%P"
+        exit /b 0
+    )
+)
+echo  [ERRO] Nenhuma porta livre encontrada para o frontend.
+pause
 exit /b 1
 
 :WaitForHttp
