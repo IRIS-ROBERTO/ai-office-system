@@ -9,6 +9,9 @@ set "VENV=%ROOT%.venv\Scripts"
 set "FRONTEND=%ROOT%frontend"
 set "FRONTEND_ENV_FILE=%FRONTEND%\.env.local"
 set "COMPOSE_FILE=%ROOT%docker-compose.yml"
+set "LOG_DIR=%ROOT%logs"
+set "BACKEND_LOG=%LOG_DIR%\iris-backend.log"
+set "FRONTEND_LOG=%LOG_DIR%\iris-frontend.log"
 set "BACKEND_MODULE=backend.api.main:app"
 set "BACKEND_PORT=8000"
 set "FRONTEND_PORT=3000"
@@ -69,6 +72,13 @@ if errorlevel 1 (
     exit /b 1
 )
 echo  [OK] npm detectado
+
+if not exist "%LOG_DIR%" (
+    mkdir "%LOG_DIR%" >nul 2>&1
+)
+break > "%BACKEND_LOG%"
+break > "%FRONTEND_LOG%"
+echo  [OK] Logs serao gravados em %LOG_DIR%
 
 echo  [CHECK] Validando dependencias Python do backend...
 "%VENV%\python.exe" -c "import fastapi, uvicorn" >nul 2>&1
@@ -199,23 +209,32 @@ echo          Para tempo real completo, use Docker Desktop, WSL ou redis-server 
 
 echo.
 echo  [BACKEND] Iniciando FastAPI em %API_URL%...
-start "IRIS-Backend" /min cmd /c "cd /d \"%ROOT%\" && set \"REDIS_URL=redis://127.0.0.1:%REDIS_PORT%\" && \"%VENV%\python.exe\" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info"
-call :WaitForHttp "%API_URL%/health" 45
+start "IRIS-Backend" /min cmd /k "cd /d \"%ROOT%\" && set \"REDIS_URL=redis://127.0.0.1:%REDIS_PORT%\" && \"%VENV%\python.exe\" -m uvicorn %BACKEND_MODULE% --host 0.0.0.0 --port %BACKEND_PORT% --reload --log-level info >> \"%BACKEND_LOG%\" 2>&1"
+call :WaitForHttp "%API_URL%/docs" 45
 if errorlevel 1 (
-    echo  [ERRO] Backend nao respondeu em %API_URL%/health
-    echo         Verifique a janela IRIS-Backend.
+    echo  [ERRO] Backend nao respondeu em %API_URL%/docs
+    echo         Verifique a janela IRIS-Backend ou o log:
+    echo         %BACKEND_LOG%
     pause
     exit /b 1
 )
-echo  [OK] Backend respondeu ao health check
+echo  [OK] Backend respondeu ao boot check
+call :WaitForHttp "%API_URL%/health" 10
+if errorlevel 1 (
+    echo  [AVISO] API subiu, mas /health ainda nao respondeu imediatamente.
+    echo          Consulte %BACKEND_LOG% se quiser diagnostico adicional.
+) else (
+    echo  [OK] Backend respondeu ao health check
+)
 
 echo.
 echo  [FRONTEND] Iniciando Vite em %FRONTEND_URL%...
-start "IRIS-Frontend" /min cmd /c "cd /d \"%FRONTEND%\" && set \"VITE_API_URL=%API_URL%\" && set \"VITE_WS_URL=%WS_URL%\" && npm run dev"
+start "IRIS-Frontend" /min cmd /k "cd /d \"%FRONTEND%\" && set \"VITE_API_URL=%API_URL%\" && set \"VITE_WS_URL=%WS_URL%\" && npm run dev >> \"%FRONTEND_LOG%\" 2>&1"
 call :WaitForHttp "%FRONTEND_URL%" 45
 if errorlevel 1 (
     echo  [ERRO] Frontend nao respondeu em %FRONTEND_URL%
-    echo         Verifique a janela IRIS-Frontend.
+    echo         Verifique a janela IRIS-Frontend ou o log:
+    echo         %FRONTEND_LOG%
     pause
     exit /b 1
 )
@@ -237,6 +256,7 @@ echo.
 echo   Logs:
 echo     Backend  - janela "IRIS-Backend"
 echo     Frontend - janela "IRIS-Frontend"
+echo     Arquivos  - %LOG_DIR%
 echo.
 echo   Pressione qualquer tecla para ENCERRAR tudo.
 echo  ========================================================
