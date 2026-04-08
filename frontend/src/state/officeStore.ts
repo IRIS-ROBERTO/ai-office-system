@@ -60,10 +60,11 @@ const ROLE_COLORS: Record<string, string> = {
   manager: '#fbbf24',
 };
 
-// Default positions for agents in their respective team zones
-const DEV_ZONE = { xMin: 30, xMax: 550, yMin: 80, yMax: 620 };
-const MARKETING_ZONE = { xMin: 730, xMax: 1250, yMin: 80, yMax: 620 };
-const ORCHESTRATOR_ZONE = { x: 640, yMin: 100, yMax: 620 };
+// Default positions — matches new 1440x810 canvas layout
+// Dev zone: 0–636, Corridor: 636–744, Marketing: 744–1440
+const DEV_ZONE      = { xMin: 50,  xMax: 590,  yMin: 100, yMax: 650 };
+const MARKETING_ZONE= { xMin: 780, xMax: 1390, yMin: 100, yMax: 650 };
+const ORCHESTRATOR_ZONE = { x: 690, yMin: 150, yMax: 600 };
 
 function getRoleColor(role: string): string {
   const lowerRole = role.toLowerCase();
