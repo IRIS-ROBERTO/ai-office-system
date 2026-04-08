@@ -19,7 +19,7 @@ from crewai import Agent, Process
 from backend.config.settings import settings
 from backend.core.event_types import AgentRole, TeamType
 from backend.core.resource_monitor import ResourceMonitor, get_capacity_report
-from backend.tools.ollama_tool import get_llm_for_role
+from backend.tools.ollama_tool import get_crewai_llm_str
 
 logger = logging.getLogger(__name__)
 
@@ -446,15 +446,8 @@ class AgentFactory:
 
         # Selecionar LLM
         if model_override:
-            # Override explícito: usar ollama direto com modelo especificado
-            from langchain_ollama import ChatOllama
-
-            llm = ChatOllama(
-                model=model_override,
-                base_url=settings.OLLAMA_BASE_URL,
-                temperature=0.1,
-                num_predict=settings.LOCAL_MAX_TOKENS,
-            )
+            # Override explícito: LiteLLM string para CrewAI ≥0.63
+            llm = f"ollama/{model_override}"
             model_used = model_override
         else:
             # Verificar se o resource_monitor recomenda um modelo diferente
@@ -469,18 +462,12 @@ class AgentFactory:
                     recommended,
                     default_model,
                 )
-                from langchain_ollama import ChatOllama
-
-                llm = ChatOllama(
-                    model=recommended,
-                    base_url=settings.OLLAMA_BASE_URL,
-                    temperature=0.1,
-                    num_predict=settings.LOCAL_MAX_TOKENS,
-                )
+                # LiteLLM string — formato requerido pelo CrewAI ≥0.63
+                llm = f"ollama/{recommended}"
                 model_used = recommended
             else:
-                # Usar roteamento padrão do ollama_tool
-                llm = get_llm_for_role(role)
+                # Usar roteamento padrão via get_crewai_llm_str (retorna string LiteLLM)
+                llm = get_crewai_llm_str(role)
                 model_used = default_model
 
         agent = Agent(
@@ -495,10 +482,10 @@ class AgentFactory:
             memory=True,
         )
 
-        # Metadados dinâmicos para rastreamento
-        agent.agent_id = f"{role}_factory_{id(agent)}"    # type: ignore[attr-defined]
-        agent.role_key = role                              # type: ignore[attr-defined]
-        agent.model_used = model_used                      # type: ignore[attr-defined]
+        # Metadados dinâmicos — bypass Pydantic v2 strict setattr
+        object.__setattr__(agent, "agent_id", f"{role}_factory_{id(agent)}")
+        object.__setattr__(agent, "role_key", role)
+        object.__setattr__(agent, "model_used", model_used)
 
         logger.debug(
             "[AgentFactory] Agent criado: role=%s label='%s' model=%s",

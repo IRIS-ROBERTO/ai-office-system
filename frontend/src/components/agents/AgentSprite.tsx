@@ -331,9 +331,8 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     onAgentClick(agent.agent_id);
   }, [agent.agent_id, onAgentClick]);
 
-  const shortRole = agent.agent_role.length > 9
-    ? agent.agent_role.slice(0, 9) + '…'
-    : agent.agent_role;
+  // Codinome exibido no badge — ex: "ATLAS", "PIXEL", "ORACLE"
+  const badgeLabel = agent.agent_name || agent.agent_role.split(' ')[0].toUpperCase();
 
   const labelStyle = new PIXI.TextStyle({
     fontFamily: '"SF Mono", "Cascadia Code", monospace',
@@ -341,7 +340,7 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     fontWeight: '700',
     fill: agent.color,
     align: 'center',
-    letterSpacing: 0.5,
+    letterSpacing: 1.2,
   });
 
   return (
@@ -356,10 +355,10 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
         onclick={handleClick}
         ontouchstart={handleClick}
       />
-      {/* Role badge text */}
+      {/* Codinome badge floating above head */}
       <Text
         ref={lblRef}
-        text={shortRole.toUpperCase()}
+        text={badgeLabel}
         style={labelStyle}
         anchor={[0.5, 0.5]}
         x={agent.position.x}

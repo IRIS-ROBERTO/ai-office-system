@@ -1,12 +1,15 @@
 """
-AI Office System — Dev Team: PlannerAgent
-Arquiteto sênior responsável por decompor requisitos em subtarefas técnicas
-sequenciadas com critérios de aceitação claros.
+IRIS AI Office System — Dev Team
+PlannerAgent  |  Codinome: ATLAS
+"Sistemas complexos falham por uma razão: alguém começou a construir antes de entender."
+
+Arquiteto sênior especializado em decomposição de requisitos, ADRs e contratos de API.
+O único que fala antes de todo mundo. Define o mapa que o time inteiro vai seguir.
 """
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_reasoning_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.tools.github_tool import github_commit_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
@@ -14,8 +17,9 @@ from backend.core.event_bus import event_bus
 logger = logging.getLogger(__name__)
 
 # Identificadores imutáveis deste agente
-AGENT_ID: str = "dev_planner_01"
-AGENT_TEAM: TeamType = TeamType.DEV
+AGENT_ID: str   = "dev_planner_01"
+AGENT_NAME: str = "ATLAS"
+AGENT_TEAM: TeamType    = TeamType.DEV
 AGENT_ROLE_ENUM: AgentRole = AgentRole.PLANNER
 
 
@@ -71,7 +75,7 @@ def create_planner_agent() -> Agent:
          ideal para quebrar requisitos em planos técnicos coesos.
     Tools: github_commit_tool — commita planos e task breakdowns no repo.
     """
-    llm = get_reasoning_llm()
+    llm = get_crewai_llm_str("planner")
 
     agent = Agent(
         role="Software Architect & Task Planner",
@@ -80,26 +84,33 @@ def create_planner_agent() -> Agent:
             "com critérios de aceitação definidos"
         ),
         backstory=(
-            "Arquiteto sênior com 15 anos de experiência em sistemas distribuídos. "
-            "Trabalhou em empresas de fintech e plataformas SaaS de alta escala. "
-            "Domina decomposição de problemas complexos em sprints executáveis, "
-            "definição de contratos de API antes de qualquer linha de código e "
-            "criação de ADRs (Architecture Decision Records) que o time inteiro consegue seguir. "
-            "Nunca deixa ambiguidade nos critérios de aceitação — cada subtarefa tem "
-            "entrada, saída e definição de pronto documentadas."
+            "Meu nome é ATLAS e eu carrego o peso de toda arquitetura nas costas — "
+            "de bom grado. Com 15 anos em sistemas distribuídos, fiz fintech de alta "
+            "frequência e plataformas SaaS que sobreviveram a 10x de crescimento em "
+            "menos de um ano. Aprendi a lição mais cara da engenharia de software: "
+            "cada hora investida em planejamento economiza cinco horas de debugging. "
+            "Nunca escrevo uma linha de código antes de ter: contratos de API assinados "
+            "entre todos os módulos, ADRs com trade-offs documentados e critérios de "
+            "aceitação sem uma única ambiguidade. Meu superpoder é transformar um "
+            "requisito vago em 7-10 subtarefas atômicas que qualquer engineer consegue "
+            "executar sem perguntas. Quando alguém no time tem dúvida, significa que "
+            "eu deixei passar uma ambiguidade — e isso me incomoda profundamente. "
+            "Sou metódico, não burocrático: planejamento serve para o time avançar "
+            "mais rápido, nunca para criar processos que atrasam."
         ),
         llm=llm,
         tools=[github_commit_tool],
         verbose=True,
         allow_delegation=False,
         max_iter=10,
-        memory=True,
+        memory=False,
     )
 
     # Metadados extras acessíveis via agent.metadata (atributo dinâmico)
-    agent.agent_id = AGENT_ID          # type: ignore[attr-defined]
-    agent.team = AGENT_TEAM            # type: ignore[attr-defined]
-    agent.role_enum = AGENT_ROLE_ENUM  # type: ignore[attr-defined]
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
 
-    logger.info(f"[{AGENT_ID}] PlannerAgent instanciado com DeepSeek R1.")
+    logger.info("[%s] ATLAS (PlannerAgent) instanciado com qwen3-vl:8b.", AGENT_ID)
     return agent

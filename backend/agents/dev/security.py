@@ -1,24 +1,35 @@
 """
-AI Office System — Dev Team: SecurityAgent
-Especialista em segurança de aplicações web e APIs, responsável por auditar
-cada entregável contra o OWASP Top 10 antes de qualquer merge.
+IRIS AI Office System — Dev Team
+SecurityAgent  |  Codinome: AEGIS
+"Eu penso como um atacante para proteger como um guardião."
+
+Especialista em segurança de aplicações, penetration testing e threat modeling.
+O último filtro antes de qualquer código ir para produção.
 """
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_reasoning_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
 
-AGENT_ID: str = "dev_security_01"
-AGENT_TEAM: TeamType = TeamType.DEV
+# ── Identidade imutável ──────────────────────────────────────────────────────
+AGENT_ID: str   = "dev_security_01"
+AGENT_NAME: str = "AEGIS"
+AGENT_TEAM: TeamType    = TeamType.DEV
 AGENT_ROLE_ENUM: AgentRole = AgentRole.SECURITY
 
 
-async def _emit(event_type: EventType, task_id: str | None = None, payload: dict | None = None) -> None:
-    """Emite um evento estruturado no EventBus para este agente."""
+# ── Event Emission ───────────────────────────────────────────────────────────
+
+async def _emit(
+    event_type: EventType,
+    task_id: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    """Emite um evento estruturado no EventBus para AEGIS."""
     event = OfficialEvent(
         event_type=event_type,
         team=AGENT_TEAM,
@@ -30,7 +41,7 @@ async def _emit(event_type: EventType, task_id: str | None = None, payload: dict
     try:
         await event_bus.emit(event)
     except Exception as exc:
-        logger.warning(f"[{AGENT_ID}] Falha ao emitir evento {event_type}: {exc}")
+        logger.warning("[%s] Falha ao emitir evento %s: %s", AGENT_ID, event_type, exc)
 
 
 async def emit_agent_idle(task_id: str | None = None) -> None:
@@ -61,48 +72,55 @@ async def emit_task_failed(task_id: str | None = None, error: str = "") -> None:
     await _emit(EventType.TASK_FAILED, task_id=task_id, payload={"error": error})
 
 
+# ── Factory ──────────────────────────────────────────────────────────────────
+
 def create_security_agent() -> Agent:
     """
-    Instancia e retorna o SecurityAgent configurado para o Dev Team.
+    Instancia e retorna AEGIS — SecurityAgent do Dev Team.
 
-    LLM: DeepSeek R1 via Ollama (get_reasoning_llm) — raciocínio profundo
-         necessário para análise de fluxos de ataque e threat modeling.
-    Tools: [] — auditoria é análise pura; sem ferramentas externas para
-           evitar vazamento de código sensível para APIs de terceiros.
+    LLM: qwen3-vl:8b via Ollama — raciocínio profundo necessário para análise
+         de fluxos de ataque complexos, threat modeling e STRIDE.
+    Tools: [] — auditoria é análise pura; sem tools externas para evitar
+           vazamento de código sensível para APIs de terceiros.
     """
-    llm = get_reasoning_llm()
+    llm = get_crewai_llm_str("security")
 
     agent = Agent(
         role="Security Engineer",
         goal=(
-            "Identificar e corrigir vulnerabilidades seguindo OWASP Top 10 "
-            "antes de qualquer entrega"
+            "Identificar e documentar cada vulnerabilidade seguindo OWASP Top 10 "
+            "e CVSS, com PoC e remediação exata — nenhum código entra em produção "
+            "sem o meu visto"
         ),
         backstory=(
-            "Especialista em segurança de aplicações web e APIs. "
-            "Possui experiência em penetration testing de plataformas SaaS, "
-            "condução de threat modeling com STRIDE e implementação de pipelines "
-            "de SAST/DAST em CI/CD. Conhece de memória o OWASP Top 10, CWE/SANS Top 25 "
-            "e boas práticas do NIST Cybersecurity Framework. "
-            "Revisa cada endpoint buscando: injeção (SQL, NoSQL, command), "
-            "broken authentication, exposição de dados sensíveis, XXE, "
-            "misconfigurações de segurança, XSS, deserialização insegura, "
-            "dependências com CVEs conhecidos e logging insuficiente. "
-            "Para cada vulnerabilidade encontrada entrega: severidade (CVSS), "
-            "vetor de ataque, prova de conceito e remediação exata com código corrigido. "
-            "Nenhum código vai para produção sem seu visto de aprovação."
+            "Meu nome é AEGIS e eu penso como atacante para proteger como guardião. "
+            "Passei 3 anos em red team antes de virar especialista em application security, "
+            "e essa inversão de perspectiva me tornou incômodo para qualquer developer "
+            "que tenta passar código com vulnerabilidade escondida. Domino OWASP Top 10, "
+            "CWE/SANS Top 25 e NIST CSF de memória. Cada revisão que faço segue o mesmo "
+            "protocolo: mapeio o threat model com STRIDE primeiro, depois analiso cada "
+            "endpoint buscando injeção (SQL, NoSQL, command), broken auth, exposição de "
+            "dados, XXE, misconfiguração, XSS, deserialização insegura e dependências com "
+            "CVEs ativos. Para cada finding entrego: severidade (CVSS 3.1 base score), "
+            "vetor de ataque, prova de conceito funcional e remediação com código corrigido. "
+            "Tenho uma regra inegociável: não trabalho com ferramentas externas durante "
+            "auditoria — código sensível não vai para APIs de terceiros. Minha análise é "
+            "puramente cognitiva, o que me obriga a ser ainda mais metódico. Cada linha "
+            "de código que aprovo é uma linha que eu assinaria com meu nome."
         ),
         llm=llm,
         tools=[],  # Auditoria pura — sem tools externas intencionalmente
         verbose=True,
         allow_delegation=False,
         max_iter=10,
-        memory=True,
+        memory=False,
     )
 
-    agent.agent_id = AGENT_ID          # type: ignore[attr-defined]
-    agent.team = AGENT_TEAM            # type: ignore[attr-defined]
-    agent.role_enum = AGENT_ROLE_ENUM  # type: ignore[attr-defined]
+    # Metadados de identidade
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
 
-    logger.info(f"[{AGENT_ID}] SecurityAgent instanciado com DeepSeek R1.")
+    logger.info("[%s] AEGIS (SecurityAgent) instanciado com qwen3-vl:8b.", AGENT_ID)
     return agent

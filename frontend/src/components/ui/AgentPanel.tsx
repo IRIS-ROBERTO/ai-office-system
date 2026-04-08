@@ -67,8 +67,11 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ agentId, onClose }) => {
               }}
             />
             <div>
-              <div style={styles.agentRole}>{agent.agent_role}</div>
-              <div style={styles.agentId}>{agent.agent_id}</div>
+              {/* Codinome em destaque */}
+              <div style={{ ...styles.agentRole, letterSpacing: '0.1em' }}>
+                {agent.agent_name || agent.agent_role.split(' ')[0].toUpperCase()}
+              </div>
+              <div style={{ ...styles.agentId, opacity: 0.55 }}>{agent.agent_role}</div>
             </div>
           </div>
           <button style={styles.closeBtn} onClick={onClose} aria-label="Close">

@@ -55,9 +55,11 @@ class Settings(BaseSettings):
     GITHUB_DEFAULT_ORG: Optional[str] = None
 
     # === Performance ===
-    MAX_CONCURRENT_AGENTS: int = 12       # 6 dev + 6 marketing
-    SENIOR_MAX_TOKENS: int = 2048         # Sênior é conciso e direto
-    LOCAL_MAX_TOKENS: int = 4096
+    # MAX_CONCURRENT_AGENTS: 2 = 1 dev + 1 marketing simultâneos (Ollama single-GPU)
+    # Em GPUs com >24GB VRAM, aumentar para 6 ou 12.
+    MAX_CONCURRENT_AGENTS: int = 2
+    SENIOR_MAX_TOKENS: int = 1024         # Conciso: planning JSON não precisa de mais
+    LOCAL_MAX_TOKENS: int = 2048          # Reduzido para acelerar inferência local
     ANIMATION_QUEUE_BUFFER_MS: int = 500
 
     # === Qualidade ===

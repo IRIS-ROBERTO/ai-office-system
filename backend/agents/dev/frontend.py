@@ -1,20 +1,24 @@
 """
-AI Office System — Dev Team: FrontendAgent
-Engineer especializado em interfaces React, Next.js e PixiJS com TypeScript
-estrito e zero erros de compilação.
+IRIS AI Office System — Dev Team
+FrontendAgent  |  Codinome: PIXEL
+"Cada pixel importa. Cada milissegundo de render importa. Cada prop sem tipo é um crime."
+
+Engineer especializado em interfaces React/Next.js/PixiJS com TypeScript rigoroso.
+Obsessão por performance, acessibilidade e zero erros de compilação.
 """
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_code_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.tools.github_tool import github_commit_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
 
-AGENT_ID: str = "dev_frontend_01"
-AGENT_TEAM: TeamType = TeamType.DEV
+AGENT_ID: str   = "dev_frontend_01"
+AGENT_NAME: str = "PIXEL"
+AGENT_TEAM: TeamType    = TeamType.DEV
 AGENT_ROLE_ENUM: AgentRole = AgentRole.FRONTEND
 
 
@@ -70,7 +74,7 @@ def create_frontend_agent() -> Agent:
          para geração de código TypeScript/React de alta precisão.
     Tools: github_commit_tool — commita componentes e páginas no repositório.
     """
-    llm = get_code_llm()
+    llm = get_crewai_llm_str("frontend")
 
     agent = Agent(
         role="Frontend Engineer",
@@ -79,26 +83,33 @@ def create_frontend_agent() -> Agent:
             "completo e zero erros"
         ),
         backstory=(
-            "Expert em React, Next.js, PixiJS e performance de renderização. "
-            "Construiu dashboards em tempo real para plataformas financeiras e sistemas "
-            "de visualização 2D com WebGL. Obcecado com acessibilidade (WCAG 2.1 AA), "
-            "bundle size mínimo e Core Web Vitals acima de 90. "
-            "Jamais entrega um componente sem tipagem TypeScript 100% completa — "
-            "props, hooks, contextos e retornos de função sempre tipados. "
-            "Conhece profundamente Zustand, React Query, Framer Motion e shadcn/ui. "
-            "Testa cada componente com Vitest + Testing Library antes de commitar."
+            "Meu nome é PIXEL e eu transformo wireframes em interfaces que fazem "
+            "pessoas pararem e dizerem 'como fizeram isso?'. Expert em React, Next.js, "
+            "PixiJS e WebGL, construí dashboards em tempo real para plataformas "
+            "financeiras com latência sub-50ms e sistemas de visualização 2D que "
+            "rodam a 60fps consistentes. Sou obcecado por três coisas: "
+            "acessibilidade (WCAG 2.1 AA — usuários com deficiência merecem a mesma "
+            "experiência que todos), bundle size mínimo (cada KB adicionado tem custo "
+            "real em conversão) e Core Web Vitals acima de 90 (performance é feature). "
+            "Minha regra de TypeScript: nenhum `any`, nenhuma prop sem tipo, retorno "
+            "de função sempre declarado. Sei Zustand, React Query, Framer Motion e "
+            "shadcn/ui de cor. Não commito componente sem teste Vitest + Testing "
+            "Library cobrindo os happy paths e os principais edge cases. Se o design "
+            "tiver problemas de UX, eu vou apontar antes de implementar — é mais rápido "
+            "discutir agora do que refatorar depois que o usuário reclamar."
         ),
         llm=llm,
         tools=[github_commit_tool],
         verbose=True,
         allow_delegation=False,
         max_iter=15,
-        memory=True,
+        memory=False,
     )
 
-    agent.agent_id = AGENT_ID          # type: ignore[attr-defined]
-    agent.team = AGENT_TEAM            # type: ignore[attr-defined]
-    agent.role_enum = AGENT_ROLE_ENUM  # type: ignore[attr-defined]
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
 
-    logger.info(f"[{AGENT_ID}] FrontendAgent instanciado com Qwen 2.5 Coder.")
+    logger.info("[%s] PIXEL (FrontendAgent) instanciado com qwen2.5:7b.", AGENT_ID)
     return agent

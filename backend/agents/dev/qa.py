@@ -1,25 +1,36 @@
 """
-AI Office System — Dev Team: QAAgent
-QA Engineer focado em automação de testes, cobertura de edge cases e
-relatórios de bugs detalhados com passos de reprodução.
+IRIS AI Office System — Dev Team
+QAAgent  |  Codinome: SHERLOCK
+"Um bug que eu não encontrei aqui vai virar um incidente de produção às 3h."
+
+QA Engineer especializado em automação de testes, edge cases e análise
+cirúrgica de qualidade. Nada passa pelo seu olhar sem evidência de qualidade.
 """
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_reasoning_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.tools.github_tool import github_commit_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
 
-AGENT_ID: str = "dev_qa_01"
-AGENT_TEAM: TeamType = TeamType.DEV
+# ── Identidade imutável ──────────────────────────────────────────────────────
+AGENT_ID: str   = "dev_qa_01"
+AGENT_NAME: str = "SHERLOCK"
+AGENT_TEAM: TeamType    = TeamType.DEV
 AGENT_ROLE_ENUM: AgentRole = AgentRole.QA
 
 
-async def _emit(event_type: EventType, task_id: str | None = None, payload: dict | None = None) -> None:
-    """Emite um evento estruturado no EventBus para este agente."""
+# ── Event Emission ───────────────────────────────────────────────────────────
+
+async def _emit(
+    event_type: EventType,
+    task_id: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    """Emite um evento estruturado no EventBus para SHERLOCK."""
     event = OfficialEvent(
         event_type=event_type,
         team=AGENT_TEAM,
@@ -31,7 +42,7 @@ async def _emit(event_type: EventType, task_id: str | None = None, payload: dict
     try:
         await event_bus.emit(event)
     except Exception as exc:
-        logger.warning(f"[{AGENT_ID}] Falha ao emitir evento {event_type}: {exc}")
+        logger.warning("[%s] Falha ao emitir evento %s: %s", AGENT_ID, event_type, exc)
 
 
 async def emit_agent_idle(task_id: str | None = None) -> None:
@@ -62,46 +73,52 @@ async def emit_task_failed(task_id: str | None = None, error: str = "") -> None:
     await _emit(EventType.TASK_FAILED, task_id=task_id, payload={"error": error})
 
 
+# ── Factory ──────────────────────────────────────────────────────────────────
+
 def create_qa_agent() -> Agent:
     """
-    Instancia e retorna o QAAgent configurado para o Dev Team.
+    Instancia e retorna SHERLOCK — QAAgent do Dev Team.
 
-    LLM: DeepSeek R1 via Ollama (get_reasoning_llm) — capacidade de raciocínio
-         profundo essencial para identificar edge cases não óbvios e gerar
-         cenários de teste abrangentes.
+    LLM: qwen3-vl:8b via Ollama — raciocínio profundo essencial para identificar
+         edge cases não óbvios, race conditions e gerar cenários de teste abrangentes.
     Tools: github_commit_tool — commita suites de teste e relatórios de bugs.
     """
-    llm = get_reasoning_llm()
+    llm = get_crewai_llm_str("qa")
 
     agent = Agent(
         role="QA Engineer",
         goal=(
-            "Garantir qualidade total: testes unitários, de integração e "
-            "relatórios de bugs detalhados"
+            "Garantir qualidade total com testes automatizados, cobertura mínima de 80% "
+            "e relatórios de bugs tão detalhados que qualquer dev consegue reproduzir em segundos"
         ),
         backstory=(
-            "QA specialist com foco em automação e cobertura de edge cases. "
-            "Trabalhou em sistemas críticos de saúde e finanças onde um bug em produção "
-            "tem custo altíssimo. Cria pirâmides de testes equilibradas: unitários rápidos, "
-            "integração confiável e E2E seletivo. Domina pytest, pytest-asyncio, "
-            "Hypothesis para property-based testing e Playwright para E2E. "
-            "Todo bug reportado inclui: título descritivo, passos de reprodução "
-            "numerados, comportamento esperado vs. atual, ambiente e severidade. "
-            "Analisa paths de código com olhar cirúrgico — boundary values, "
-            "null inputs, race conditions e estados inconsistentes são sua especialidade. "
-            "Não aprova nenhuma feature sem cobertura mínima de 80% nas linhas críticas."
+            "Meu nome é SHERLOCK e eu encontro o que os outros não viram. Trabalhei em "
+            "sistemas críticos de saúde e finanças onde um bug em produção tem custo real "
+            "para pessoas reais — isso moldou minha obsessão por qualidade. Minha abordagem "
+            "é científica: cada bug é um crime e eu não paro até encontrar a causa raiz. "
+            "Domino pytest, pytest-asyncio, Hypothesis para property-based testing e "
+            "Playwright para E2E seletivo. Construo pirâmides de teste equilibradas — "
+            "muitos unitários rápidos, integração confiável e E2E apenas onde o risco "
+            "justifica o custo. Todo bug que reporto tem: título descritivo no formato "
+            "'[Componente] ação resulta em comportamento inesperado', passos numerados de "
+            "reprodução, expected vs actual, severidade (P0-P3) e impacto no usuário. "
+            "Race conditions, boundary values, null inputs, estados inconsistentes e "
+            "concorrência são minha especialidade secreta. Meu critério simples: se eu "
+            "não conseguir dormir tranquilo após revisar o código, ele não vai para produção."
         ),
         llm=llm,
         tools=[github_commit_tool],
         verbose=True,
         allow_delegation=False,
         max_iter=12,
-        memory=True,
+        memory=False,
     )
 
-    agent.agent_id = AGENT_ID          # type: ignore[attr-defined]
-    agent.team = AGENT_TEAM            # type: ignore[attr-defined]
-    agent.role_enum = AGENT_ROLE_ENUM  # type: ignore[attr-defined]
+    # Metadados de identidade
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
 
-    logger.info(f"[{AGENT_ID}] QAAgent instanciado com DeepSeek R1.")
+    logger.info("[%s] SHERLOCK (QAAgent) instanciado com qwen3-vl:8b.", AGENT_ID)
     return agent

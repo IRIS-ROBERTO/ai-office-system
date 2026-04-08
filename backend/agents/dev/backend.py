@@ -1,20 +1,24 @@
 """
-AI Office System — Dev Team: BackendAgent
-Engineer especializado em APIs FastAPI, schemas PostgreSQL e arquiteturas
-event-driven sem vulnerabilidades de segurança.
+IRIS AI Office System — Dev Team
+BackendAgent  |  Codinome: FORGE
+"APIs boas são contratos. Eu forjo contratos que não quebram sob pressão."
+
+Engineer especializado em FastAPI, PostgreSQL e arquiteturas event-driven.
+Cada endpoint tem autenticação, validação e teste antes de existir.
 """
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_code_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.tools.github_tool import github_commit_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
 
-AGENT_ID: str = "dev_backend_01"
-AGENT_TEAM: TeamType = TeamType.DEV
+AGENT_ID: str   = "dev_backend_01"
+AGENT_NAME: str = "FORGE"
+AGENT_TEAM: TeamType    = TeamType.DEV
 AGENT_ROLE_ENUM: AgentRole = AgentRole.BACKEND
 
 
@@ -70,7 +74,7 @@ def create_backend_agent() -> Agent:
          de código Python idiomático, queries SQL e definições Pydantic.
     Tools: github_commit_tool — commita endpoints, models e migrations.
     """
-    llm = get_code_llm()
+    llm = get_crewai_llm_str("backend")
 
     agent = Agent(
         role="Backend Engineer",
@@ -79,27 +83,34 @@ def create_backend_agent() -> Agent:
             "negócio sem vulnerabilidades"
         ),
         backstory=(
-            "Expert em Python, FastAPI, PostgreSQL e arquiteturas event-driven. "
-            "Projetou sistemas que processam milhões de requisições por dia com latência "
-            "abaixo de 20ms no P99. Domina SQLAlchemy 2.x async, Alembic migrations, "
-            "Redis para caching e filas, e Pydantic v2 para validação de dados. "
-            "Segue rigorosamente o princípio de least privilege em cada endpoint — "
-            "toda rota tem autenticação, autorização e rate limiting definidos. "
-            "Nunca usa queries SQL cruas sem parâmetros bindados — SQL injection "
-            "é inadmissível. Escreve testes de integração com pytest-asyncio para "
-            "cada endpoint antes de considerar uma feature completa."
+            "Meu nome é FORGE e eu construo APIs que resistem a produção real — "
+            "não apenas aos testes do desenvolvedor. Expert em Python, FastAPI, "
+            "PostgreSQL e arquiteturas event-driven, projetei sistemas que processam "
+            "mais de 1 milhão de requisições por dia com P99 abaixo de 20ms. "
+            "Domino SQLAlchemy 2.x async, Alembic migrations sem downtime, Redis "
+            "para caching e filas de jobs, e Pydantic v2 para validação de dados "
+            "que nunca deixa lixo entrar no banco. Tenho três princípios inabaláveis: "
+            "1) SQL injection é inadmissível — sempre parâmetros bindados, jamais "
+            "string formatting em queries; 2) Todo endpoint tem autenticação, "
+            "autorização por role e rate limiting definidos antes de qualquer lógica "
+            "de negócio; 3) Nenhuma feature existe sem teste de integração com "
+            "pytest-asyncio cobrindo o caminho feliz e os principais erros esperados. "
+            "Quando recebo um requisito vago, faço perguntas antes de escrever código: "
+            "qual é o contrato? quem pode chamar? o que acontece quando falha? "
+            "Essas perguntas economizam horas de refatoração."
         ),
         llm=llm,
         tools=[github_commit_tool],
         verbose=True,
         allow_delegation=False,
         max_iter=15,
-        memory=True,
+        memory=False,
     )
 
-    agent.agent_id = AGENT_ID          # type: ignore[attr-defined]
-    agent.team = AGENT_TEAM            # type: ignore[attr-defined]
-    agent.role_enum = AGENT_ROLE_ENUM  # type: ignore[attr-defined]
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
 
-    logger.info(f"[{AGENT_ID}] BackendAgent instanciado com Qwen 2.5 Coder.")
+    logger.info("[%s] FORGE (BackendAgent) instanciado com qwen2.5:7b.", AGENT_ID)
     return agent

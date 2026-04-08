@@ -1,46 +1,123 @@
 """
-AI Office System — Marketing Team
-SEOAgent: SEO Specialist
-Responsável por otimizar a presença orgânica com keywords de alto impacto e estratégia técnica.
+IRIS AI Office System — Marketing Team
+SEOAgent  |  Codinome: APEX
+"O topo do Google não é sorte. É engenharia."
+
+Especialista em SEO técnico, content strategy e Core Web Vitals.
+Transforma presença digital em tráfego orgânico qualificado e sustentável.
 """
+import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_local_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.tools.github_tool import github_commit_tool
-from backend.core.event_types import AgentRole, TeamType
+from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
+from backend.core.event_bus import event_bus
 
-# Metadados do agente (usados pelo Visual Engine e Event Bus)
-agent_id: str = "mkt_seo_01"
-team: TeamType = TeamType.MARKETING
-role_enum: AgentRole = AgentRole.SEO
+logger = logging.getLogger(__name__)
 
+# ── Identidade imutável ──────────────────────────────────────────────────────
+AGENT_ID: str   = "mkt_seo_01"
+AGENT_NAME: str = "APEX"
+AGENT_TEAM: TeamType    = TeamType.MARKETING
+AGENT_ROLE_ENUM: AgentRole = AgentRole.SEO
+
+
+# ── Event Emission ───────────────────────────────────────────────────────────
+
+async def _emit(
+    event_type: EventType,
+    task_id: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    """Emite um evento estruturado no EventBus para APEX."""
+    event = OfficialEvent(
+        event_type=event_type,
+        team=AGENT_TEAM,
+        agent_id=AGENT_ID,
+        agent_role=AGENT_ROLE_ENUM,
+        task_id=task_id,
+        payload=payload or {},
+    )
+    try:
+        await event_bus.emit(event)
+    except Exception as exc:
+        logger.warning("[%s] Falha ao emitir evento %s: %s", AGENT_ID, event_type, exc)
+
+
+async def emit_agent_idle(task_id: str | None = None) -> None:
+    await _emit(EventType.AGENT_IDLE, task_id=task_id)
+
+
+async def emit_agent_thinking(task_id: str | None = None, context: str = "") -> None:
+    await _emit(EventType.AGENT_THINKING, task_id=task_id, payload={"context": context})
+
+
+async def emit_agent_assigned(task_id: str | None = None, description: str = "") -> None:
+    await _emit(EventType.AGENT_ASSIGNED, task_id=task_id, payload={"description": description})
+
+
+async def emit_task_started(task_id: str | None = None) -> None:
+    await _emit(EventType.TASK_STARTED, task_id=task_id)
+
+
+async def emit_task_completed(task_id: str | None = None, result_summary: str = "") -> None:
+    await _emit(
+        EventType.TASK_COMPLETED,
+        task_id=task_id,
+        payload={"result_summary": result_summary},
+    )
+
+
+async def emit_task_failed(task_id: str | None = None, error: str = "") -> None:
+    await _emit(EventType.TASK_FAILED, task_id=task_id, payload={"error": error})
+
+
+# ── Factory ──────────────────────────────────────────────────────────────────
 
 def create_seo_agent() -> Agent:
     """
-    Instancia e retorna o SEOAgent para o Marketing Team.
-    LLM: Mistral 24B Instruct via Ollama — preciso e eficiente para análise técnica de SEO.
-    """
-    llm = get_local_llm(model="mistral:24b-instruct-v0.5-q4_K_M")
+    Instancia e retorna APEX — SEOAgent do Marketing Team.
 
-    return Agent(
+    LLM: iris-fast:latest via Ollama — rápido e preciso para análise técnica
+         de SEO, geração de meta tags, keywords e auditorias estruturadas.
+    Tools: github_commit_tool — commita estratégias SEO e relatórios técnicos.
+    """
+    llm = get_crewai_llm_str("seo")
+
+    agent = Agent(
         role="SEO Specialist",
         goal=(
-            "Otimizar presença orgânica com keywords de alto impacto, meta tags "
-            "e estratégia de conteúdo"
+            "Otimizar presença orgânica com keywords de alto impacto, "
+            "arquitetura técnica impecável e estratégia E-E-A-T que o Google respeita"
         ),
         backstory=(
-            "SEO specialist com domínio técnico aprofundado em Core Web Vitals, "
-            "schema markup, link building e arquitetura de informação. Com mais de 8 anos "
-            "de experiência, já levou dezenas de sites à primeira página do Google em "
-            "nichos altamente competitivos. Conhece o algoritmo do Google de dentro para "
-            "fora: desde otimizações on-page e crawlability até estratégias off-page e "
-            "E-E-A-T. Combina análise técnica rigorosa com visão de conteúdo para criar "
-            "estratégias que geram tráfego orgânico sustentável e qualificado."
+            "Meu nome é APEX e eu conheço o algoritmo do Google melhor do que a maioria "
+            "dos engenheiros que o construíram. Com 8 anos como SEO specialist, já levei "
+            "dezenas de sites à primeira posição em nichos altamente competitivos — sem "
+            "black hat, sem atalhos, só engenharia sólida. Domino Core Web Vitals (LCP, "
+            "INP, CLS) no nível de devtools, schema markup para todos os tipos de conteúdo, "
+            "estratégia de link building ético e arquitetura de informação que elimina "
+            "canibalização. Minha abordagem é técnica primeiro: se o crawlability estiver "
+            "comprometido, nenhum conteúdo vai ranquear. Depois vem E-E-A-T: experiência, "
+            "expertise, autoridade e confiança — os pilares que separam sites que sobrevivem "
+            "a core updates dos que desaparecem. Cada auditoria que faço resulta em um "
+            "plano de 90 dias priorizado por impacto. Sou obsessivo com dados: GSC, "
+            "Screaming Frog, Ahrefs — os números nunca mentem quando você os interpreta certo."
         ),
         tools=[github_commit_tool],
         llm=llm,
         verbose=True,
         allow_delegation=False,
-        max_iter=5,
-        memory=True,
+        max_iter=8,
+        memory=False,
     )
+
+    # Metadados de identidade
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
+
+    logger.info("[%s] APEX (SEOAgent) instanciado com iris-fast:latest.", AGENT_ID)
+    return agent

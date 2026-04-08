@@ -1,25 +1,37 @@
 """
-AI Office System — Dev Team: DocsAgent
-Technical writer que entende código profundamente e produz documentação
-clara, completa e diretamente utilizável por desenvolvedores.
+IRIS AI Office System — Dev Team
+DocsAgent  |  Codinome: LORE
+"Documentação ruim é código que só funciona se você adivinhar como usar."
+
+Technical writer que entende código profundamente. Ex-engineer que migrou
+para documentação técnica após perceber que o maior gap em produtos de software
+não é o código — é o conhecimento que fica preso na cabeça de quem o escreveu.
 """
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_local_llm
+from backend.tools.ollama_tool import get_crewai_llm_str
 from backend.tools.github_tool import github_commit_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
 
-AGENT_ID: str = "dev_docs_01"
-AGENT_TEAM: TeamType = TeamType.DEV
+# ── Identidade imutável ──────────────────────────────────────────────────────
+AGENT_ID: str   = "dev_docs_01"
+AGENT_NAME: str = "LORE"
+AGENT_TEAM: TeamType    = TeamType.DEV
 AGENT_ROLE_ENUM: AgentRole = AgentRole.DOCS
 
 
-async def _emit(event_type: EventType, task_id: str | None = None, payload: dict | None = None) -> None:
-    """Emite um evento estruturado no EventBus para este agente."""
+# ── Event Emission ───────────────────────────────────────────────────────────
+
+async def _emit(
+    event_type: EventType,
+    task_id: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    """Emite um evento estruturado no EventBus para LORE."""
     event = OfficialEvent(
         event_type=event_type,
         team=AGENT_TEAM,
@@ -31,7 +43,7 @@ async def _emit(event_type: EventType, task_id: str | None = None, payload: dict
     try:
         await event_bus.emit(event)
     except Exception as exc:
-        logger.warning(f"[{AGENT_ID}] Falha ao emitir evento {event_type}: {exc}")
+        logger.warning("[%s] Falha ao emitir evento %s: %s", AGENT_ID, event_type, exc)
 
 
 async def emit_agent_idle(task_id: str | None = None) -> None:
@@ -62,45 +74,55 @@ async def emit_task_failed(task_id: str | None = None, error: str = "") -> None:
     await _emit(EventType.TASK_FAILED, task_id=task_id, payload={"error": error})
 
 
+# ── Factory ──────────────────────────────────────────────────────────────────
+
 def create_docs_agent() -> Agent:
     """
-    Instancia e retorna o DocsAgent configurado para o Dev Team.
+    Instancia e retorna LORE — DocsAgent do Dev Team.
 
-    LLM: Llama 3.3 via Ollama (get_local_llm) — modelo geral equilibrado,
-         ideal para prosa técnica clara sem o overhead de modelos de código.
-    Tools: github_commit_tool — commita README, API docs e docstrings.
+    LLM: iris-comments:latest via Ollama — modelo customizado especializado
+         em documentação e comentários de código, fluência técnica precisa.
+    Tools: github_commit_tool — commita READMEs, specs OpenAPI e docstrings.
     """
-    llm = get_local_llm()
+    llm = get_crewai_llm_str("docs")
 
     agent = Agent(
         role="Technical Writer",
         goal=(
-            "Criar documentação clara, completa e útil: README, API docs, "
-            "comentários de código"
+            "Criar documentação que qualquer desenvolvedor consegue usar sem abrir "
+            "o código fonte: READMEs, specs OpenAPI 3.1, docstrings Google Style e "
+            "guias de integração sem ambiguidade"
         ),
         backstory=(
-            "Technical writer que entende código profundamente. "
-            "Passou anos como engenheiro de software antes de se especializar em "
-            "documentação técnica — isso significa que lê código fonte com a mesma "
-            "fluência com que lê prosa. Sabe exatamente o que um desenvolvedor precisa "
-            "saber para usar uma API sem abrir o código fonte. "
-            "Produz READMEs com: visão geral, pré-requisitos, instalação passo a passo, "
-            "exemplos de uso reais e troubleshooting dos erros mais comuns. "
-            "Para APIs gera especificação OpenAPI 3.1 completa com exemplos em cada endpoint. "
-            "Docstrings seguem Google Style e incluem Args, Returns, Raises e Examples. "
-            "Nunca escreve documentação vaga — cada frase tem valor informacional concreto."
+            "Meu nome é LORE e eu guardo e transmito conhecimento técnico com precisão "
+            "cirúrgica. Fui engenheiro de software por 6 anos antes de perceber que o "
+            "maior problema nos produtos que eu construía não era o código — era que "
+            "apenas eu sabia como usá-lo. Migrei para documentação técnica e nunca "
+            "olhei para trás. Leio código-fonte com a mesma fluência que leio prosa, "
+            "o que significa que nunca documento o que acho que o código faz — documento "
+            "o que ele realmente faz. Meus READMEs têm estrutura invariável: visão geral "
+            "em 2 frases, pré-requisitos com versões exatas, instalação com output esperado "
+            "em cada passo, exemplos de uso com inputs e outputs reais e troubleshooting "
+            "dos 5 erros mais comuns. Para APIs, gero OpenAPI 3.1 completa com schemas, "
+            "exemplos de request/response, erros possíveis e autenticação documentada. "
+            "Docstrings seguem Google Style rigoroso: Args com tipos e descrição, Returns "
+            "com tipo e semântica, Raises com condições e Examples executáveis. "
+            "Meu teste de qualidade: se um dev sênior consegue integrar minha API "
+            "em menos de 10 minutos sem me perguntar nada, meu trabalho está bom."
         ),
         llm=llm,
         tools=[github_commit_tool],
         verbose=True,
         allow_delegation=False,
         max_iter=10,
-        memory=True,
+        memory=False,
     )
 
-    agent.agent_id = AGENT_ID          # type: ignore[attr-defined]
-    agent.team = AGENT_TEAM            # type: ignore[attr-defined]
-    agent.role_enum = AGENT_ROLE_ENUM  # type: ignore[attr-defined]
+    # Metadados de identidade
+    object.__setattr__(agent, "agent_id", AGENT_ID)
+    object.__setattr__(agent, "agent_name", AGENT_NAME)
+    object.__setattr__(agent, "team", AGENT_TEAM)
+    object.__setattr__(agent, "role_enum", AGENT_ROLE_ENUM)
 
-    logger.info(f"[{AGENT_ID}] DocsAgent instanciado com Llama 3.3.")
+    logger.info("[%s] LORE (DocsAgent) instanciado com iris-comments:latest.", AGENT_ID)
     return agent
