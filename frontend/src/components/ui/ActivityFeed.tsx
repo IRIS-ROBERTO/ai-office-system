@@ -38,6 +38,7 @@ function eventToItem(payload: Record<string, unknown>): FeedItem | null {
     task_assigned:       { msg: `Task [${taskId}…] → ${name}`, color: '#6366f1', icon: '⇒' },
     task_started:        { msg: `Task [${taskId}…] started`,   color: '#f59e0b', icon: '▷' },
     task_in_progress:    { msg: `Task [${taskId}…] in progress`, color: '#f59e0b', icon: '⋯' },
+    task_heartbeat:      { msg: `Task [${taskId}…] still running`, color: '#38bdf8', icon: '⏱' },
     task_completed:      { msg: `Task [${taskId}…] done`,      color: '#00ff88', icon: '✓' },
     task_failed:         { msg: `Task [${taskId}…] failed`,    color: '#ef4444', icon: '✗' },
   };

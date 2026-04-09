@@ -229,6 +229,7 @@ function buildActivityItem(event: Record<string, unknown>): AgentActivityItem | 
   const payload = (event.payload as Record<string, unknown> | undefined) || {};
   const subtask = typeof payload.subtask_title === 'string' ? payload.subtask_title : null;
   const request = typeof payload.request === 'string' ? payload.request : null;
+  const elapsedSeconds = typeof payload.elapsed_seconds === 'number' ? payload.elapsed_seconds : null;
 
   const map: Record<string, { message: string; tone: string }> = {
     agent_called: { message: `${role} was called into the workflow`, tone: '#fbbf24' },
@@ -239,6 +240,7 @@ function buildActivityItem(event: Record<string, unknown>): AgentActivityItem | 
     task_created: { message: request || 'A new mission entered the queue', tone: '#a855f7' },
     task_started: { message: subtask || 'Execution started', tone: '#f59e0b' },
     task_in_progress: { message: subtask || 'Task execution in progress', tone: '#f59e0b' },
+    task_heartbeat: { message: elapsedSeconds ? `${subtask || 'Task still running'} · ${elapsedSeconds}s` : (subtask || 'Task still running'), tone: '#38bdf8' },
     task_completed: { message: subtask || 'Task completed successfully', tone: '#22c55e' },
     task_failed: { message: subtask || 'Task failed and needs review', tone: '#ef4444' },
   };

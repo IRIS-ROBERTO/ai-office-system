@@ -70,10 +70,31 @@ class ServiceRequestResponse(BaseModel):
     current_agent_role: Optional[str] = None
     tested_by_team: bool
     approved_by_orchestrator: bool
+    last_execution_message: Optional[str] = None
+    last_execution_stage: Optional[str] = None
+    execution_log_size: int = 0
     created_at: str
     updated_at: str
 
 
 class ServiceRequestListResponse(BaseModel):
     items: list[ServiceRequestResponse]
+    total: int
+
+
+class ExecutionLogEntryResponse(BaseModel):
+    timestamp: str
+    stage: str
+    message: str
+    level: str
+    team: str
+    task_id: str
+    agent_id: Optional[str] = None
+    agent_role: Optional[str] = None
+    metadata: dict
+
+
+class ExecutionLogResponse(BaseModel):
+    task_id: str
+    items: list[ExecutionLogEntryResponse]
     total: int

@@ -18,6 +18,9 @@ type ServiceRequest = {
   current_agent_role?: string | null;
   tested_by_team: boolean;
   approved_by_orchestrator: boolean;
+  last_execution_message?: string | null;
+  last_execution_stage?: string | null;
+  execution_log_size: number;
   created_at: string;
   updated_at: string;
 };
@@ -424,6 +427,24 @@ const RequestDesk: React.FC<RequestDeskProps> = ({ apiUrl }) => {
 
                     <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, color: '#dbe4f0' }}>
                       {item.request}
+                    </div>
+
+                    <div style={{
+                      marginTop: 12,
+                      borderRadius: 12,
+                      border: `1px solid ${BORDER}`,
+                      background: 'rgba(255,255,255,0.025)',
+                      padding: '10px 12px',
+                    }}>
+                      <div style={{ fontSize: 10, color: '#64748b', letterSpacing: 1.2, textTransform: 'uppercase' }}>
+                        Ultima execucao
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 12, color: '#e2e8f0', lineHeight: 1.55 }}>
+                        {item.last_execution_message || 'Sem trilha de execucao ainda.'}
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 11, color: '#94a3b8' }}>
+                        {item.last_execution_stage || 'sem etapa'} · {item.execution_log_size} registros
+                      </div>
                     </div>
 
                     <div style={{

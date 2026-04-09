@@ -22,7 +22,9 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from backend.config.settings import settings
 from backend.core.event_bus import event_bus
+from backend.core.execution_trace import append_execution_log
 from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamType
+from backend.core.improvement_loop import improvement_loop
 from backend.core.state import TaskState
 from backend.tools.ollama_tool import get_senior_llm
 
@@ -140,6 +142,73 @@ class BaseOrchestrator(ABC):
     def _role_to_enum(self, role: str) -> AgentRole:
         return _ROLE_TO_AGENT_ROLE_ENUM.get(role, AgentRole.ORCHESTRATOR)
 
+    def _trace(
+        self,
+        task_id: str,
+        stage: str,
+        message: str,
+        *,
+        level: str = "info",
+        agent_id: str | None = None,
+        agent_role: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        append_execution_log(
+            task_id=task_id,
+            team=self.team.value,
+            stage=stage,
+            message=message,
+            level=level,
+            agent_id=agent_id,
+            agent_role=agent_role,
+            metadata=metadata,
+        )
+        line = "[Trace][%s][%s][%s/%s] %s" % (
+            task_id[:8],
+            stage,
+            agent_role or "system",
+            agent_id or "n/a",
+            message,
+        )
+        if level == "error":
+            logger.error(line)
+        elif level == "warning":
+            logger.warning(line)
+        else:
+            logger.info(line)
+
+    async def _emit_execution_heartbeat(
+        self,
+        task_id: str,
+        subtask: dict,
+        agent_id: str,
+        agent_role_enum: AgentRole,
+    ) -> None:
+        elapsed = 0
+        while True:
+            await asyncio.sleep(settings.EXECUTION_HEARTBEAT_SECONDS)
+            elapsed += settings.EXECUTION_HEARTBEAT_SECONDS
+            await _emit(
+                EventType.TASK_HEARTBEAT,
+                self.team,
+                agent_id,
+                agent_role_enum,
+                task_id=task_id,
+                payload={
+                    "subtask_id": subtask["id"],
+                    "subtask_title": subtask["title"],
+                    "elapsed_seconds": elapsed,
+                },
+            )
+            self._trace(
+                task_id,
+                "subtask_heartbeat",
+                f"Subtarefa '{subtask['title']}' segue em execucao ha {elapsed}s.",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"], "elapsed_seconds": elapsed},
+            )
+
     # ------------------------------------------------------------------
     # LangGraph node: senior_planning_node
     # ------------------------------------------------------------------
@@ -171,6 +240,13 @@ class BaseOrchestrator(ABC):
             AgentRole.ORCHESTRATOR,
             task_id=task_id,
             payload={"context": "Analisando requisição e decompondo em subtarefas"},
+        )
+        self._trace(
+            task_id,
+            "senior_planning_start",
+            "Orquestrador iniciou a decomposicao da solicitacao.",
+            agent_id=orch_id,
+            agent_role=AgentRole.ORCHESTRATOR.value,
         )
 
         system_prompt = (
@@ -266,10 +342,26 @@ class BaseOrchestrator(ABC):
             logger.info(
                 f"[{orch_id}] Senior planning concluído: {len(subtasks)} subtarefas geradas."
             )
+            self._trace(
+                task_id,
+                "senior_planning_complete",
+                f"Planejamento concluido com {len(subtasks)} subtarefas.",
+                agent_id=orch_id,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={"subtask_count": len(subtasks)},
+            )
 
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             logger.error(f"[{orch_id}] Falha ao parsear resposta do Senior LLM: {exc}")
             logger.debug(f"Raw response: {raw_content[:200]}")
+            self._trace(
+                task_id,
+                "senior_planning_fallback",
+                f"Falha ao parsear JSON do planejamento; fallback para subtarefa unica. Erro: {exc}",
+                level="warning",
+                agent_id=orch_id,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+            )
             senior_directive = "Executar a requisição com qualidade máxima e atenção aos detalhes."
             subtasks = [
                 {
@@ -336,6 +428,14 @@ class BaseOrchestrator(ABC):
             f"[route_to_agent] Subtarefa [{idx + 1}/{len(subtasks)}] "
             f"'{subtask['title']}' → {agent_id}"
         )
+        self._trace(
+            state["task_id"],
+            "agent_routed",
+            f"Subtarefa '{subtask['title']}' roteada para {role}.",
+            agent_id=agent_id,
+            agent_role=agent_role_enum.value,
+            metadata={"subtask_id": subtask["id"], "subtask_index": idx},
+        )
         return {}
 
     # ------------------------------------------------------------------
@@ -383,6 +483,14 @@ class BaseOrchestrator(ABC):
                 "acceptance_criteria": subtask["acceptance_criteria"],
             },
         )
+        self._trace(
+            task_id,
+            "subtask_start",
+            f"Agente {role} iniciou a subtarefa '{subtask['title']}'.",
+            agent_id=agent_id,
+            agent_role=agent_role_enum.value,
+            metadata={"subtask_id": subtask["id"], "retry_count": state["retry_count"]},
+        )
 
         # Build/reuse crew
         if self._crew is None:
@@ -413,12 +521,46 @@ class BaseOrchestrator(ABC):
                 process=Process.sequential,
                 verbose=False,
             )
-            result = await asyncio.to_thread(single_task_crew.kickoff)
+            heartbeat_task = asyncio.create_task(
+                self._emit_execution_heartbeat(task_id, subtask, agent_id, agent_role_enum)
+            )
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(single_task_crew.kickoff),
+                    timeout=settings.SUBTASK_EXECUTION_TIMEOUT_SECONDS,
+                )
+            finally:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             output_text: str = str(result) if result else ""
 
+        except asyncio.TimeoutError:
+            timeout_s = settings.SUBTASK_EXECUTION_TIMEOUT_SECONDS
+            output_text = f"ERRO: subtarefa excedeu timeout de {timeout_s}s."
+            self._trace(
+                task_id,
+                "subtask_timeout",
+                f"Subtarefa '{subtask['title']}' excedeu o timeout de {timeout_s}s.",
+                level="error",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"], "timeout_seconds": timeout_s},
+            )
         except Exception as exc:
             logger.error(f"[execute_subtask] Erro ao executar subtarefa '{subtask['title']}': {exc}")
             output_text = f"ERRO: {exc}"
+            self._trace(
+                task_id,
+                "subtask_error",
+                f"Erro ao executar subtarefa '{subtask['title']}': {exc}",
+                level="error",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"]},
+            )
 
         # Accumulate outputs
         updated_outputs = dict(state.get("agent_outputs") or {})
@@ -427,6 +569,14 @@ class BaseOrchestrator(ABC):
         logger.info(
             f"[execute_subtask] Subtarefa '{subtask['title']}' concluída. "
             f"Output: {output_text[:120]}..."
+        )
+        self._trace(
+            task_id,
+            "subtask_complete",
+            f"Subtarefa '{subtask['title']}' encerrou execucao.",
+            agent_id=agent_id,
+            agent_role=agent_role_enum.value,
+            metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
         )
 
         result = {
@@ -519,6 +669,14 @@ class BaseOrchestrator(ABC):
             f"[quality_gate] Subtarefa '{subtask['title']}' — "
             f"approved={approved}, feedback={feedback[:80]}"
         )
+        self._trace(
+            task_id,
+            "quality_gate_result",
+            f"Quality gate avaliou '{subtask['title']}' com approved={approved}.",
+            agent_id=self.ORCHESTRATOR_AGENT_ID,
+            agent_role=AgentRole.ORCHESTRATOR.value,
+            metadata={"subtask_id": subtask["id"], "approved": approved, "feedback": feedback[:240]},
+        )
 
         if approved:
             await _emit(
@@ -544,6 +702,15 @@ class BaseOrchestrator(ABC):
         if retry_count >= MAX_RETRIES:
             logger.warning(
                 f"[quality_gate] Subtarefa '{subtask['title']}' falhou após {retry_count} tentativas."
+            )
+            self._trace(
+                task_id,
+                "quality_gate_failed",
+                f"Subtarefa '{subtask['title']}' reprovada definitivamente apos {retry_count} tentativas.",
+                level="error",
+                agent_id=self.ORCHESTRATOR_AGENT_ID,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={"subtask_id": subtask["id"], "retry_count": retry_count},
             )
             errors = list(state.get("errors") or [])
             errors.append(
@@ -575,6 +742,15 @@ class BaseOrchestrator(ABC):
 
         logger.info(
             f"[quality_gate] Retry {retry_count}/{MAX_RETRIES} para '{subtask['title']}'."
+        )
+        self._trace(
+            task_id,
+            "quality_gate_retry",
+            f"Subtarefa '{subtask['title']}' precisa de nova tentativa ({retry_count}/{MAX_RETRIES}).",
+            level="warning",
+            agent_id=self.ORCHESTRATOR_AGENT_ID,
+            agent_role=AgentRole.ORCHESTRATOR.value,
+            metadata={"subtask_id": subtask["id"], "retry_count": retry_count},
         )
         return {
             "quality_approved": False,
@@ -633,8 +809,65 @@ class BaseOrchestrator(ABC):
             f"[aggregate] Tarefa {task_id} concluída. "
             f"{len(subtasks)} subtarefas, {len(errors)} erros."
         )
+        self._trace(
+            task_id,
+            "aggregation_complete",
+            f"Tarefa agregada pelo orquestrador com {len(subtasks)} subtarefas e {len(errors)} erros.",
+            agent_id=self.ORCHESTRATOR_AGENT_ID,
+            agent_role=AgentRole.ORCHESTRATOR.value,
+            metadata={"subtask_count": len(subtasks), "error_count": len(errors)},
+        )
+
+        # Fire improvement loop as background task — doesn't block the response
+        asyncio.create_task(
+            self._run_improvement_loop(state, task_id, subtasks, agent_outputs)
+        )
 
         return {"final_output": final_output}
+
+    async def _run_improvement_loop(
+        self,
+        state: TaskState,
+        task_id: str,
+        subtasks: list[dict],
+        agent_outputs: dict,
+    ) -> None:
+        """
+        Coleta auto-análise de cada agente e sintetiza proposals de melhoria.
+        Roda em background para não bloquear a entrega do resultado ao usuário.
+        """
+        from backend.tools.ollama_tool import get_local_llm
+        from backend.config.settings import settings as _s
+
+        analyses = []
+        agent_llm = get_local_llm(model=_s.LOCAL_MODEL_FALLBACK, temperature=0.2)
+
+        for subtask in subtasks:
+            sid = subtask["id"]
+            role = subtask.get("assigned_role", self._default_role())
+            agent_id = self._role_to_agent_id(role)
+            output_text = agent_outputs.get(sid, "")
+            if not output_text:
+                continue
+            try:
+                analysis = await improvement_loop.collect_agent_analysis(
+                    agent_id=agent_id,
+                    agent_role=role,
+                    task_id=task_id,
+                    task_output=output_text,
+                    llm=agent_llm,
+                )
+                analyses.append(analysis)
+            except Exception as exc:
+                logger.warning("[ImprovementLoop] Análise falhou para %s: %s", agent_id, exc)
+
+        if analyses:
+            proposals = await improvement_loop.synthesize_proposals(analyses, self._llm)
+            await improvement_loop.save_to_supabase(analyses, proposals)
+            logger.info(
+                "[ImprovementLoop] %d proposals geradas para tarefa %s.",
+                len(proposals), task_id,
+            )
 
     # ------------------------------------------------------------------
     # Conditional edge functions
@@ -750,6 +983,13 @@ class BaseOrchestrator(ABC):
             "[Orchestrator:%s] Iniciando tarefa %s: '%s...'",
             team_label, task_id, state["original_request"][:80],
         )
+        self._trace(
+            task_id,
+            "orchestrator_run_start",
+            "Orquestrador iniciou o grafo de execucao da tarefa.",
+            agent_id=self.ORCHESTRATOR_AGENT_ID,
+            agent_role=AgentRole.ORCHESTRATOR.value,
+        )
 
         config = {"configurable": {"thread_id": task_id}}
         final_state: TaskState = await self._graph.ainvoke(state, config=config)
@@ -758,6 +998,13 @@ class BaseOrchestrator(ABC):
         logger.info(
             "[Orchestrator:%s] Tarefa %s finalizada. Output: %d chars.",
             team_label, task_id, output_len,
+        )
+        self._trace(
+            task_id,
+            "orchestrator_run_complete",
+            f"Grafo de execucao finalizado; output final com {output_len} caracteres.",
+            agent_id=self.ORCHESTRATOR_AGENT_ID,
+            agent_role=AgentRole.ORCHESTRATOR.value,
         )
         return final_state
 

@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     GITHUB_USERNAME: str = "IRIS-ROBERTO"
     GITHUB_DEFAULT_ORG: Optional[str] = None
 
+    # === n8n Workflows (PULSE + NOVA) ===
+    N8N_BASE_URL: str = "http://localhost:5678"
+    N8N_API_KEY: str = ""
+
+    # === Notion (LORE + NOVA + MAVEN + PULSE) ===
+    NOTION_TOKEN: str = ""
+    NOTION_DEFAULT_PARENT_ID: str = ""  # Page or database ID to create pages under
+
+    # === PicoClaw MCP Bridge (ATLAS + PIXEL + FORGE) ===
+    PICOCLAW_HOST: str = "http://localhost:8765"
+    PICOCLAW_ENABLED: bool = True
+
     # === Performance ===
     # MAX_CONCURRENT_AGENTS: 2 = 1 dev + 1 marketing simultâneos (Ollama single-GPU)
     # Em GPUs com >24GB VRAM, aumentar para 6 ou 12.
@@ -70,6 +82,8 @@ class Settings(BaseSettings):
     # === Qualidade ===
     MAX_RETRIES_PER_SUBTASK: int = 3
     QUALITY_GATE_ENABLED: bool = True
+    SUBTASK_EXECUTION_TIMEOUT_SECONDS: int = 900
+    EXECUTION_HEARTBEAT_SECONDS: int = 20
 
     class Config:
         env_file = ".env"

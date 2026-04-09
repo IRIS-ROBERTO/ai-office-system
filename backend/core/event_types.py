@@ -15,6 +15,7 @@ class EventType(str, Enum):
     TASK_CREATED = "task_created"
     TASK_STARTED = "task_started"
     TASK_IN_PROGRESS = "task_in_progress"
+    TASK_HEARTBEAT = "task_heartbeat"
     TASK_COMPLETED = "task_completed"
     TASK_FAILED = "task_failed"
 

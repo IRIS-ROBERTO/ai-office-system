@@ -12,6 +12,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HT
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.event_bus import event_bus
+from backend.core.execution_trace import (
+    append_execution_log,
+    get_execution_log,
+    get_last_execution_entry,
+)
 from backend.core.state import TaskState
 from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamType
 from backend.core.runtime_registry import agent_registry, seed_agent_registry
@@ -29,6 +34,8 @@ from backend.api.schemas import (
     ServiceRequestCreate,
     ServiceRequestListResponse,
     ServiceRequestResponse,
+    ExecutionLogEntryResponse,
+    ExecutionLogResponse,
 )
 from backend.api.websocket import websocket_endpoint
 
@@ -243,8 +250,54 @@ def _sync_service_request(task_id: str) -> None:
         return
 
     progress = _derive_service_request_progress(service_request, task_state)
+    last_execution = get_last_execution_entry(task_id)
     service_request.update(progress)
+    service_request["last_execution_message"] = last_execution["message"] if last_execution else None
+    service_request["last_execution_stage"] = last_execution["stage"] if last_execution else None
+    service_request["execution_log_size"] = len(get_execution_log(task_id))
     service_request["updated_at"] = _utc_now_iso()
+
+
+def _trace_task(
+    task_id: str,
+    team: str,
+    stage: str,
+    message: str,
+    *,
+    level: str = "info",
+    agent_id: str | None = None,
+    agent_role: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    entry = append_execution_log(
+        task_id=task_id,
+        team=team,
+        stage=stage,
+        message=message,
+        level=level,
+        agent_id=agent_id,
+        agent_role=agent_role,
+        metadata=metadata,
+    )
+
+    log_line = (
+        "[Trace][%s][%s][%s/%s] %s"
+        % (
+            task_id[:8],
+            stage,
+            agent_role or "system",
+            agent_id or "n/a",
+            message,
+        )
+    )
+    if level == "error":
+        logger.error(log_line)
+    elif level == "warning":
+        logger.warning(log_line)
+    else:
+        logger.info(log_line)
+
+    _sync_service_request(task_id)
 
 
 def _make_progress_callback(task_id: str):
@@ -281,6 +334,7 @@ async def _run_dev_task(task_id: str, request: str, priority: int):
     if state is None:
         logger.error(f"[DevTask] Task {task_id} não encontrada no registry.")
         return
+    _trace_task(task_id, "dev", "runtime_start", "Execucao da tarefa iniciada no runtime dev.", agent_id="orchestrator_senior_01", agent_role="orchestrator")
     try:
         orchestrator = DevOrchestrator()
         final_state = await orchestrator.run(
@@ -288,6 +342,7 @@ async def _run_dev_task(task_id: str, request: str, priority: int):
         )
         _active_tasks[task_id] = final_state
         _sync_service_request(task_id)
+        _trace_task(task_id, "dev", "runtime_complete", "Execucao da tarefa encerrada com retorno do orquestrador.", agent_id="orchestrator_senior_01", agent_role="orchestrator")
         logger.info(f"[DevTask] Task {task_id} concluída. "
                     f"Output: {len(final_state.get('final_output') or '')} chars.")
     except Exception as exc:
@@ -295,6 +350,7 @@ async def _run_dev_task(task_id: str, request: str, priority: int):
         if task_id in _active_tasks:
             _active_tasks[task_id]["errors"].append(str(exc))
             _sync_service_request(task_id)
+        _trace_task(task_id, "dev", "runtime_error", f"Falha no runtime dev: {exc}", level="error", agent_id="orchestrator_senior_01", agent_role="orchestrator")
 
 
 async def _run_marketing_task(task_id: str, request: str, priority: int):
@@ -303,6 +359,7 @@ async def _run_marketing_task(task_id: str, request: str, priority: int):
     if state is None:
         logger.error(f"[MarketingTask] Task {task_id} não encontrada no registry.")
         return
+    _trace_task(task_id, "marketing", "runtime_start", "Execucao da tarefa iniciada no runtime marketing.", agent_id="orchestrator_senior_01", agent_role="orchestrator")
     try:
         orchestrator = MarketingOrchestrator()
         final_state = await orchestrator.run(
@@ -310,6 +367,7 @@ async def _run_marketing_task(task_id: str, request: str, priority: int):
         )
         _active_tasks[task_id] = final_state
         _sync_service_request(task_id)
+        _trace_task(task_id, "marketing", "runtime_complete", "Execucao da tarefa encerrada com retorno do orquestrador.", agent_id="orchestrator_senior_01", agent_role="orchestrator")
         logger.info(f"[MarketingTask] Task {task_id} concluída. "
                     f"Output: {len(final_state.get('final_output') or '')} chars.")
     except Exception as exc:
@@ -317,6 +375,7 @@ async def _run_marketing_task(task_id: str, request: str, priority: int):
         if task_id in _active_tasks:
             _active_tasks[task_id]["errors"].append(str(exc))
             _sync_service_request(task_id)
+        _trace_task(task_id, "marketing", "runtime_error", f"Falha no runtime marketing: {exc}", level="error", agent_id="orchestrator_senior_01", agent_role="orchestrator")
 
 
 async def _enqueue_team_task(
@@ -331,6 +390,7 @@ async def _enqueue_team_task(
 
     state = _make_task_state(task_id, team_value, request, priority)
     _active_tasks[task_id] = state
+    _trace_task(task_id, team_value, "task_created", "Tarefa enfileirada para execucao.", agent_id="orchestrator_senior_01", agent_role="orchestrator", metadata={"priority": priority})
     await _emit_task_created(task_id, team, request, priority)
 
     if team == TeamType.DEV:
@@ -370,6 +430,16 @@ async def get_task(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' não encontrada.")
     return task
+
+
+@app.get("/tasks/{task_id}/execution-log", response_model=ExecutionLogResponse)
+async def get_task_execution_log(task_id: str):
+    """Retorna a trilha de execução da tarefa com etapas, agentes e heartbeats."""
+    if task_id not in _active_tasks and task_id not in _task_to_service_request:
+      raise HTTPException(status_code=404, detail=f"Task '{task_id}' não encontrada.")
+
+    items = [ExecutionLogEntryResponse(**item) for item in get_execution_log(task_id)]
+    return ExecutionLogResponse(task_id=task_id, items=items, total=len(items))
 
 
 @app.post("/service-requests", response_model=ServiceRequestResponse, status_code=202)
@@ -415,6 +485,15 @@ async def create_service_request(body: ServiceRequestCreate, background_tasks: B
 
     _service_requests[request_id] = service_request
     _task_to_service_request[task_response.task_id] = request_id
+    _trace_task(
+        task_response.task_id,
+        team_value,
+        "request_intake",
+        f"Solicitacao '{service_request['title']}' recebida no portal e vinculada ao backlog.",
+        agent_id="orchestrator_senior_01",
+        agent_role="orchestrator",
+        metadata={"request_id": request_id, "urgency": service_request["urgency"]},
+    )
     _sync_service_request(task_response.task_id)
 
     return ServiceRequestResponse(**_service_requests[request_id])
