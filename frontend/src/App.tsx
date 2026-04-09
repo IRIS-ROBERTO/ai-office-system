@@ -52,6 +52,19 @@ function statusColor(s: string) {
   }
 }
 
+function teamColor(team: 'dev' | 'marketing' | 'orchestrator') {
+  switch (team) {
+    case 'dev':
+      return C.textDev;
+    case 'marketing':
+      return C.textMkt;
+    case 'orchestrator':
+      return C.textGold;
+    default:
+      return C.textSecondary;
+  }
+}
+
 // ─── Sub-component: Connection indicator ──────────────────────────────────────
 const ConnectionDot: React.FC<{ connected: boolean }> = ({ connected }) => {
   const [pulse, setPulse] = useState(false);
@@ -150,7 +163,16 @@ const AgentRoster: React.FC<{ onAgentClick: (id: string) => void; selectedId: st
   onAgentClick, selectedId
 }) => {
   const agents = useOfficeStore(s => s.agents);
-  const list = Object.values(agents).sort((a, b) => a.team.localeCompare(b.team));
+  const teamOrder: Record<'orchestrator' | 'dev' | 'marketing', number> = {
+    orchestrator: 0,
+    dev: 1,
+    marketing: 2,
+  };
+  const list = Object.values(agents).sort((a, b) => {
+    const byTeam = teamOrder[a.team] - teamOrder[b.team];
+    if (byTeam !== 0) return byTeam;
+    return a.agent_name.localeCompare(b.agent_name);
+  });
 
   if (list.length === 0) return (
     <div style={{ padding: '16px 14px', color: C.textSecondary, fontSize: 11, fontStyle: 'italic', textAlign: 'center' }}>
@@ -164,7 +186,7 @@ const AgentRoster: React.FC<{ onAgentClick: (id: string) => void; selectedId: st
       scrollbarColor: `rgba(255,255,255,0.08) transparent` }}>
       {list.map(agent => {
         const isSelected = agent.agent_id === selectedId;
-        const teamColor = agent.team === 'dev' ? C.textDev : C.textMkt;
+        const accent = teamColor(agent.team);
         return (
           <button
             key={agent.agent_id}
@@ -193,7 +215,7 @@ const AgentRoster: React.FC<{ onAgentClick: (id: string) => void; selectedId: st
                 {agent.agent_role}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                <span style={{ fontSize: 9, color: teamColor, letterSpacing: 0.5, fontFamily: 'monospace' }}>
+                <span style={{ fontSize: 9, color: accent, letterSpacing: 0.5, fontFamily: 'monospace' }}>
                   {agent.team.toUpperCase()}
                 </span>
                 <span style={{ width: 4, height: 4, borderRadius: '50%',
@@ -201,6 +223,19 @@ const AgentRoster: React.FC<{ onAgentClick: (id: string) => void; selectedId: st
                 <span style={{ fontSize: 9, color: statusColor(agent.status), letterSpacing: 0.3 }}>
                   {agent.status}
                 </span>
+                {agent.team === 'orchestrator' && (
+                  <span style={{
+                    fontSize: 8,
+                    color: C.textGold,
+                    border: `1px solid ${C.borderGold}`,
+                    borderRadius: 999,
+                    padding: '1px 5px',
+                    letterSpacing: 0.8,
+                    fontFamily: 'monospace',
+                  }}>
+                    CROWN
+                  </span>
+                )}
               </div>
             </div>
           </button>
@@ -256,8 +291,10 @@ export default function App() {
   const agentArr = Object.values(agents);
   const devAgents = agentArr.filter(a => a.team === 'dev');
   const mktAgents = agentArr.filter(a => a.team === 'marketing');
+  const orchestratorAgents = agentArr.filter(a => a.team === 'orchestrator');
   const devWorking = devAgents.filter(a => a.status === 'working').length;
   const mktWorking = mktAgents.filter(a => a.status === 'working').length;
+  const orchestratorWorking = orchestratorAgents.filter(a => a.status === 'working' || a.status === 'thinking').length;
   const agentCount = agentArr.length;
 
   const handleAgentClick = useCallback((id: string) => {
@@ -279,7 +316,7 @@ export default function App() {
         const records = await response.json() as Array<{
           agent_id: string;
           role: string;
-          team: 'dev' | 'marketing';
+          team: 'dev' | 'marketing' | 'orchestrator';
           status: 'idle' | 'thinking' | 'working' | 'moving';
           current_task_id: string | null;
           completed_tasks: number;
@@ -362,6 +399,8 @@ export default function App() {
           color={C.textDev} border={C.borderDev} />
         <TeamChip label="MKT" count={mktAgents.length} working={mktWorking}
           color={C.textMkt} border={C.borderMkt} />
+        <TeamChip label="ORCH" count={orchestratorAgents.length} working={orchestratorWorking}
+          color={C.textGold} border={C.borderGold} />
 
         <div style={{ flex: 1 }} />
 

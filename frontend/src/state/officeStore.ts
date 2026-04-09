@@ -1,12 +1,21 @@
 import { create } from 'zustand';
 import { getAgentProfile } from '../data/agentProfiles';
+import {
+  DESK_POSITIONS,
+  getDeskPosition,
+  getMeetingPosition,
+  getNexusWaypoint,
+  type Position,
+} from '../data/agentPositions';
 
 export interface Agent {
   agent_id: string;
   agent_name: string;        // Codinome: ATLAS, PIXEL, FORGE, etc.
   agent_role: string;
-  team: 'dev' | 'marketing';
+  team: 'dev' | 'marketing' | 'orchestrator';
   status: 'idle' | 'thinking' | 'working' | 'moving';
+  /** Visual body pose — drives seated vs walking vs standing rendering in AgentSprite. */
+  pose: 'seated' | 'walking' | 'standing';
   current_task_id: string | null;
   position: { x: number; y: number };
   color: string;
@@ -41,7 +50,7 @@ export interface AgentActivityItem {
 export interface AgentBootstrapRecord {
   agent_id: string;
   role: string;
-  team: 'dev' | 'marketing';
+  team: 'dev' | 'marketing' | 'orchestrator';
   status: Agent['status'];
   current_task_id: string | null;
   completed_tasks: number;
@@ -62,6 +71,10 @@ interface OfficeStore {
   setConnected: (v: boolean) => void;
   dequeueAnimation: () => AnimationQueueItem | undefined;
   getAgentsByTeam: (team: string) => Agent[];
+  /** Teleport an agent to a new target position (AgentSprite lerps smoothly). */
+  setAgentPosition: (agentId: string, position: Position) => void;
+  /** Trigger autonomous idle wander (call from external timer). */
+  wanderIdleAgents: () => void;
 }
 
 const ROLE_COLORS: Record<string, string> = {
@@ -100,11 +113,21 @@ function getRoleColor(role: string): string {
 
 function getDefaultPosition(
   team: 'dev' | 'marketing' | 'orchestrator',
-  index: number
+  index: number,
+  role = '',
 ): { x: number; y: number } {
+  // Try to match by role against canonical desk positions first
+  if (role) {
+    const lower = role.toLowerCase();
+    for (const [key, pos] of Object.entries(DESK_POSITIONS)) {
+      if (lower.includes(key)) return pos;
+    }
+  }
+  // Fallback: orchestrator corridor
   if (team === 'orchestrator') {
     return { x: ORCHESTRATOR_ZONE.x, y: ORCHESTRATOR_ZONE.yMin + index * 80 };
   }
+  // Fallback: zone grid
   const zone = team === 'dev' ? DEV_ZONE : MARKETING_ZONE;
   const cols = 3;
   const col = index % cols;
@@ -141,7 +164,6 @@ function ensureAgent(
 
   const role = String(event.agent_role || event.role || 'worker');
   const effectiveTeam = resolveEventTeam(event);
-  const uiTeam: 'dev' | 'marketing' = effectiveTeam === 'orchestrator' ? 'dev' : effectiveTeam;
   const existing = agents[agentId];
 
   if (existing) {
@@ -157,12 +179,13 @@ function ensureAgent(
       (event.agent_name as string | undefined) ||
       getAgentProfile(agentId, role).codename,
     agent_role: role,
-    team: uiTeam,
+    team: effectiveTeam,
     status: 'idle',
+    pose: 'seated',
     current_task_id: null,
     position:
       (event.position as { x: number; y: number } | undefined) ||
-      getDefaultPosition(effectiveTeam, idx),
+      getDefaultPosition(effectiveTeam, idx, role),
     color: getRoleColor(role),
     completed_tasks: 0,
     error_count: 0,
@@ -249,10 +272,20 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
       const nextActivity = { ...state.agentActivity };
 
       for (const record of records) {
-        const team = record.team === 'marketing' ? 'marketing' : 'dev';
+        const team =
+          record.team === 'orchestrator'
+            ? 'orchestrator'
+            : record.team === 'marketing'
+              ? 'marketing'
+              : 'dev';
         const profile = getAgentProfile(record.agent_id, record.role);
         const existing = nextAgents[record.agent_id];
-        const effectiveTeam = team === 'marketing' ? 'marketing' : 'dev';
+        const effectiveTeam =
+          team === 'orchestrator'
+            ? 'orchestrator'
+            : team === 'marketing'
+              ? 'marketing'
+              : 'dev';
         const idx = agentIndexByTeam[effectiveTeam] ?? 0;
 
         if (!existing) {
@@ -265,8 +298,12 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
           agent_role: record.role,
           team,
           status: record.status,
+          // Agents boot seated at their desks; update if active status requires standing
+          pose: (record.status === 'thinking' || record.status === 'moving')
+            ? 'standing'
+            : 'seated',
           current_task_id: record.current_task_id,
-          position: record.position || existing?.position || getDefaultPosition(effectiveTeam, idx),
+          position: record.position || existing?.position || getDefaultPosition(effectiveTeam, idx, record.role),
           color: existing?.color || getRoleColor(record.role),
           completed_tasks: record.completed_tasks,
           error_count: record.error_count ?? existing?.error_count ?? 0,
@@ -311,22 +348,77 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
         case 'agent_called':
         case 'agent_thinking': {
           if (agentId && newAgents[agentId]) {
+            const role = newAgents[agentId].agent_role;
+            const team = newAgents[agentId].team;
+            const meetPos = getMeetingPosition(role) ?? newAgents[agentId].position;
+            const nexusWP = getNexusWaypoint(team);
+
+            // Step 1: stand up + walk toward NEXUS corridor
             newAgents[agentId] = {
               ...newAgents[agentId],
-              status: 'thinking',
+              status: 'moving',
+              pose: 'walking',
+              position: nexusWP,
               current_task_id: (event.task_id as string | null) ?? newAgents[agentId].current_task_id,
             };
+
+            // Step 2: after crossing the corridor, arrive at meeting seat
+            const cId = agentId;
+            const finalPos = meetPos;
+            setTimeout(() => {
+              set((s) => {
+                if (!s.agents[cId]) return s;
+                return {
+                  agents: {
+                    ...s.agents,
+                    [cId]: { ...s.agents[cId], status: 'thinking', pose: 'standing', position: finalPos },
+                  },
+                };
+              });
+            }, 1800);
           }
           break;
         }
 
         case 'agent_idle': {
           if (agentId && newAgents[agentId]) {
-            newAgents[agentId] = {
-              ...newAgents[agentId],
-              status: 'idle',
-              current_task_id: null,
-            };
+            const role = newAgents[agentId].agent_role;
+            const team = newAgents[agentId].team;
+            const deskPos = getDeskPosition(role) ?? newAgents[agentId].position;
+            const inBoardroom = newAgents[agentId].position.y > 480;
+
+            if (inBoardroom) {
+              // Walk back through the NEXUS corridor before sitting down
+              const nexusWP = getNexusWaypoint(team);
+              newAgents[agentId] = {
+                ...newAgents[agentId],
+                status: 'moving',
+                pose: 'walking',
+                position: nexusWP,
+                current_task_id: null,
+              };
+              const cId = agentId;
+              const finalPos = deskPos;
+              setTimeout(() => {
+                set((s) => {
+                  if (!s.agents[cId]) return s;
+                  return {
+                    agents: {
+                      ...s.agents,
+                      [cId]: { ...s.agents[cId], status: 'idle', pose: 'seated', position: finalPos },
+                    },
+                  };
+                });
+              }, 1800);
+            } else {
+              newAgents[agentId] = {
+                ...newAgents[agentId],
+                status: 'idle',
+                pose: 'seated',
+                position: deskPos,
+                current_task_id: null,
+              };
+            }
           }
           break;
         }
@@ -405,11 +497,51 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
             };
           }
           if (agentId && newAgents[agentId]) {
-            newAgents[agentId] = {
-              ...newAgents[agentId],
-              status: 'working',
-              current_task_id: taskId ?? newAgents[agentId].current_task_id,
-            };
+            // Agent returns to desk to do the actual work
+            const role = newAgents[agentId].agent_role;
+            const team = newAgents[agentId].team;
+            const deskPos = getDeskPosition(role) ?? newAgents[agentId].position;
+            const inBoardroom = newAgents[agentId].position.y > 480;
+
+            if (inBoardroom) {
+              // Walk back from boardroom through NEXUS to desk
+              const nexusWP = getNexusWaypoint(team);
+              newAgents[agentId] = {
+                ...newAgents[agentId],
+                status: 'moving',
+                pose: 'walking',
+                position: nexusWP,
+                current_task_id: taskId ?? newAgents[agentId].current_task_id,
+              };
+              const cId = agentId;
+              const finalPos = deskPos;
+              const finalTaskId = taskId;
+              setTimeout(() => {
+                set((s) => {
+                  if (!s.agents[cId]) return s;
+                  return {
+                    agents: {
+                      ...s.agents,
+                      [cId]: {
+                        ...s.agents[cId],
+                        status: 'working',
+                        pose: 'seated',
+                        position: finalPos,
+                        current_task_id: finalTaskId ?? s.agents[cId].current_task_id,
+                      },
+                    },
+                  };
+                });
+              }, 1800);
+            } else {
+              newAgents[agentId] = {
+                ...newAgents[agentId],
+                status: 'working',
+                pose: 'seated',
+                position: deskPos,
+                current_task_id: taskId ?? newAgents[agentId].current_task_id,
+              };
+            }
           }
           break;
         }
@@ -427,9 +559,13 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
             };
           }
           if (agentId && newAgents[agentId]) {
+            const role = newAgents[agentId].agent_role;
+            const deskPos = getDeskPosition(role) ?? newAgents[agentId].position;
             newAgents[agentId] = {
               ...newAgents[agentId],
               status: isFinalTaskEvent ? 'idle' : newAgents[agentId].status,
+              pose: isFinalTaskEvent ? 'seated' : newAgents[agentId].pose,
+              position: isFinalTaskEvent ? deskPos : newAgents[agentId].position,
               current_task_id: isFinalTaskEvent ? null : newAgents[agentId].current_task_id,
               completed_tasks: isFinalTaskEvent
                 ? newAgents[agentId].completed_tasks + 1
@@ -444,9 +580,13 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
             newTasks[taskId] = { ...newTasks[taskId], status: 'failed' };
           }
           if (agentId && newAgents[agentId]) {
+            const role = newAgents[agentId].agent_role;
+            const deskPos = getDeskPosition(role) ?? newAgents[agentId].position;
             newAgents[agentId] = {
               ...newAgents[agentId],
               status: 'idle',
+              pose: 'seated',
+              position: deskPos,
               current_task_id: null,
               error_count: newAgents[agentId].error_count + 1,
             };
@@ -495,5 +635,40 @@ export const useOfficeStore = create<OfficeStore>((set, get) => ({
   getAgentsByTeam: (team) => {
     const { agents } = get();
     return Object.values(agents).filter((a) => a.team === team);
+  },
+
+  setAgentPosition: (agentId, position) => {
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return state;
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: { ...agent, status: 'moving', position },
+        },
+      };
+    });
+  },
+
+  wanderIdleAgents: () => {
+    set((state) => {
+      const updated: Record<string, Agent> = {};
+      for (const [id, agent] of Object.entries(state.agents)) {
+        // Only micro-fidget agents that are seated and idle at their desks
+        if (agent.status !== 'idle' || agent.pose !== 'seated') continue;
+        if (Math.random() > 0.25) continue; // 25% chance per tick — subtle
+        const base = getDeskPosition(agent.agent_role) ?? agent.position;
+        updated[id] = {
+          ...agent,
+          // Tiny ±4px range: keeps the agent alive-looking without jarring teleports
+          position: {
+            x: base.x + (Math.random() - 0.5) * 8,
+            y: base.y + (Math.random() - 0.5) * 4,
+          },
+        };
+      }
+      if (Object.keys(updated).length === 0) return state;
+      return { agents: { ...state.agents, ...updated } };
+    });
   },
 }));

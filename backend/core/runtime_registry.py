@@ -24,6 +24,7 @@ class AgentRuntimeState(TypedDict):
 
 
 _CANONICAL_AGENTS: tuple[dict[str, str], ...] = (
+    {"agent_id": "orchestrator_senior_01", "agent_role": AgentRole.ORCHESTRATOR.value, "team": "orchestrator"},
     {"agent_id": "dev_planner_01", "agent_role": AgentRole.PLANNER.value, "team": "dev"},
     {"agent_id": "dev_frontend_01", "agent_role": AgentRole.FRONTEND.value, "team": "dev"},
     {"agent_id": "dev_backend_01", "agent_role": AgentRole.BACKEND.value, "team": "dev"},
@@ -43,6 +44,8 @@ agent_registry: dict[str, AgentRuntimeState] = {}
 
 
 def _default_position(team: str, index: int) -> dict[str, int]:
+    if team == "orchestrator":
+        return {"x": 690, "y": 220 + index * 48}
     if team == "marketing":
         return {"x": 900 + (index % 3) * 120, "y": 180 + (index // 3) * 120}
     return {"x": 180 + (index % 3) * 120, "y": 180 + (index // 3) * 120}

@@ -1,12 +1,16 @@
 /**
  * AgentSprite — Premium character rendering for AI Office agents
  *
- * Each agent is rendered as a stylized humanoid with:
- *   - Team-colored body with inner gradient glow
- *   - Animated walking legs when moving
- *   - Status-specific visual effects (thinking pulse, work sparks, move trail)
- *   - Holographic status ring
- *   - Name badge that hovers above
+ * Supports three body poses driven by agent.pose from officeStore:
+ *   'seated'   — at desk (legs tucked under, arms on keyboard, typing animation)
+ *   'walking'  — in transit between zones (full leg swing, trail FX)
+ *   'standing' — in boardroom meeting (upright, thinking/idle FX)
+ *
+ * Status → pose mapping:
+ *   idle + seated     → gentle head bob, micro posture shift
+ *   working + seated  → fast typing arms, nodding head
+ *   thinking + standing → head pulse, antenna glow
+ *   moving + walking  → fast leg/arm swing, cyan trail
  */
 import React, { useCallback, useRef } from 'react';
 import { Graphics, Text, useTick } from '@pixi/react';
@@ -27,7 +31,6 @@ interface AnimState {
   renderX: number;
   renderY: number;
   tick: number;
-  // Idle float
   floatY: number;
   // Think pulse
   pulseR: number;
@@ -38,6 +41,9 @@ interface AnimState {
   // Move trail
   trail: Array<{ x: number; y: number; alpha: number }>;
   trailTimer: number;
+  // Data packet FX (working at desk)
+  dataPackets: Array<{ progress: number; lane: number; col: number }>;
+  dataTimer: number;
 }
 
 const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
@@ -52,6 +58,8 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     sparkTimer: 0,
     trailTimer: 0,
     trail: [],
+    dataPackets: [],
+    dataTimer: 0,
   });
 
   const gRef  = useRef<PIXI.Graphics>(null);
@@ -62,14 +70,13 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
   const colorR  = (color >> 16) & 0xff;
   const colorG  = (color >> 8)  & 0xff;
   const colorB  =  color        & 0xff;
-  // Lighter tint
   const colorLt = ((Math.min(colorR + 80, 255)) << 16) |
                   ((Math.min(colorG + 80, 255)) << 8)  |
                    (Math.min(colorB + 80, 255));
-  // Darker tint
   const colorDk = ((Math.max(colorR - 40, 0)) << 16) |
                   ((Math.max(colorG - 40, 0)) << 8)  |
                    (Math.max(colorB - 40, 0));
+  const isOrchestrator = agent.team === 'orchestrator' || agent.agent_role.toLowerCase().includes('orchestrator');
 
   useTick((delta) => {
     const a = animRef.current;
@@ -80,10 +87,20 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     const prevX = a.renderX, prevY = a.renderY;
     a.renderX = lerp(a.renderX, agent.position.x, lerpSpd * delta);
     a.renderY = lerp(a.renderY, agent.position.y, lerpSpd * delta);
-    const moving = Math.abs(a.renderX - prevX) > 0.5 || Math.abs(a.renderY - prevY) > 0.5;
+    const isMovingPixels = Math.abs(a.renderX - prevX) > 0.5 || Math.abs(a.renderY - prevY) > 0.5;
 
-    // ── Idle float ───────────────────────────────────────────────────────────
-    a.floatY = agent.status === 'idle' ? Math.sin(a.tick) * 5 : lerp(a.floatY, 0, 0.1 * delta);
+    const isSeated   = agent.pose === 'seated';
+    const isWalking  = agent.pose === 'walking';
+
+    // ── Float / sway ────────────────────────────────────────────────────────
+    if (isSeated) {
+      // Micro posture sway — seated agents breathe and shift weight
+      a.floatY = Math.sin(a.tick * 0.55) * 1.5;
+    } else if (agent.status === 'idle') {
+      a.floatY = Math.sin(a.tick) * 5;
+    } else {
+      a.floatY = lerp(a.floatY, 0, 0.1 * delta);
+    }
 
     // ── Think pulse ──────────────────────────────────────────────────────────
     if (agent.status === 'thinking') {
@@ -94,8 +111,8 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
       a.pulseR = lerp(a.pulseR, 1, 0.08 * delta);
     }
 
-    // ── Work sparks ──────────────────────────────────────────────────────────
-    if (agent.status === 'working') {
+    // ── Work sparks (standing/walking working state) ─────────────────────────
+    if (agent.status === 'working' && !isSeated) {
       a.sparkTimer += delta;
       if (a.sparkTimer > 8) {
         a.sparkTimer = 0;
@@ -112,11 +129,26 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     for (const s of a.sparks) {
       s.life += delta;
       s.dx += (Math.random() - 0.5) * 0.5;
-      s.dy += 0.15; // gravity
+      s.dy += 0.15;
     }
 
+    // ── Data packets (seated working — stream from agent toward monitors) ────
+    if (agent.status === 'working' && isSeated) {
+      a.dataTimer += delta;
+      if (a.dataTimer > 18) {
+        a.dataTimer = 0;
+        a.dataPackets.push({
+          progress: 0,
+          lane: Math.floor(Math.random() * 3), // 3 lanes above agent
+          col: [color, colorLt, 0x00ff88][Math.floor(Math.random() * 3)],
+        });
+      }
+    }
+    a.dataPackets = a.dataPackets.filter(d => d.progress < 1);
+    for (const d of a.dataPackets) d.progress += delta * 0.018;
+
     // ── Move trail ──────────────────────────────────────────────────────────
-    if (moving && agent.status === 'moving') {
+    if (isMovingPixels && isWalking) {
       a.trailTimer += delta;
       if (a.trailTimer > 4) {
         a.trailTimer = 0;
@@ -129,7 +161,7 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     if (!gRef.current || !gRef2.current) return;
 
     // ────────────────────────────────────────────────────────────────────────
-    // ── FX Layer (trail + sparks) ────────────────────────────────────────────
+    // ── FX Layer (trail + sparks + data packets) ─────────────────────────────
     const fx = gRef2.current;
     fx.clear();
 
@@ -140,17 +172,37 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
       fx.endFill();
     }
 
-    // Sparks
-    const cx = a.renderX, cy = a.renderY + a.floatY - 28;
-    for (const s of a.sparks) {
-      const progress = s.life / s.maxLife;
-      const sx2 = cx + s.dx * progress * 2;
-      const sy2 = cy + s.dy * progress * 2;
-      const sa = (1 - progress) * 0.9;
-      const sr = 2 * (1 - progress);
-      fx.beginFill(s.col, sa);
-      fx.drawCircle(sx2, sy2, sr);
-      fx.endFill();
+    // Sparks (only when not seated)
+    if (!isSeated) {
+      const cx = a.renderX, cy = a.renderY + a.floatY - 28;
+      for (const s of a.sparks) {
+        const progress = s.life / s.maxLife;
+        const sx2 = cx + s.dx * progress * 2;
+        const sy2 = cy + s.dy * progress * 2;
+        const sa = (1 - progress) * 0.9;
+        const sr = 2 * (1 - progress);
+        fx.beginFill(s.col, sa);
+        fx.drawCircle(sx2, sy2, sr);
+        fx.endFill();
+      }
+    }
+
+    // Data packets — float upward from agent head toward monitor area
+    if (isSeated) {
+      const cx = a.renderX;
+      const cy = a.renderY + a.floatY - 38;
+      for (const d of a.dataPackets) {
+        const laneX = cx + (d.lane - 1) * 10;
+        const py = cy - d.progress * 32;
+        const pa = (1 - d.progress) * 0.8;
+        fx.beginFill(d.col, pa);
+        fx.drawRoundedRect(laneX - 4, py - 3, 8, 6, 1);
+        fx.endFill();
+        // Tiny glow
+        fx.beginFill(d.col, pa * 0.25);
+        fx.drawCircle(laneX, py, 6);
+        fx.endFill();
+      }
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -163,12 +215,13 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     const tk = a.tick;
 
     // ── Shadow ───────────────────────────────────────────────────────────────
+    const shadowW = isSeated ? 14 : 18;
     g.beginFill(0x000000, 0.22);
-    g.drawEllipse(x, y + 32, 18, 5);
+    g.drawEllipse(x, y + (isSeated ? 24 : 32), shadowW, 5);
     g.endFill();
 
-    // ── Halo ring (working / thinking) ───────────────────────────────────────
-    if (agent.status === 'working' || agent.status === 'thinking') {
+    // ── Halo ring (working / thinking — only when not seated) ───────────────
+    if (!isSeated && (agent.status === 'working' || agent.status === 'thinking')) {
       const ringA = 0.3 + Math.sin(tk * 4) * 0.2;
       const ringR = agent.status === 'thinking' ? 36 * a.pulseR : 34 + Math.sin(tk * 5) * 3;
       g.lineStyle(1.5, color, ringA);
@@ -177,26 +230,44 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
       g.drawCircle(x, y, ringR + 5);
     }
 
-    // ── Legs ─────────────────────────────────────────────────────────────────
-    const legSwing = agent.status === 'moving' ? Math.sin(tk * 6) * 10 : Math.sin(tk * 1.5) * 2;
-    g.lineStyle(5, colorDk, 0.95);
-    // Left leg
-    g.moveTo(x - 7, y + 18);
-    g.lineTo(x - 10 + legSwing, y + 34);
-    g.lineTo(x - 14 + legSwing, y + 38);
-    // Right leg
-    g.moveTo(x + 7, y + 18);
-    g.lineTo(x + 10 - legSwing, y + 34);
-    g.lineTo(x + 14 - legSwing, y + 38);
-    // Foot caps
-    g.lineStyle(0);
-    g.beginFill(colorDk, 0.9);
-    g.drawRoundedRect(x - 18 + legSwing, y + 36, 10, 5, 2);
-    g.drawRoundedRect(x + 8 - legSwing, y + 36, 10, 5, 2);
-    g.endFill();
+    // ── Legs & Feet ─────────────────────────────────────────────────────────
+    if (isSeated) {
+      // Thighs angled forward and down (knees at desk level)
+      g.lineStyle(5, colorDk, 0.95);
+      g.moveTo(x - 7, y + 18);
+      g.lineTo(x - 9, y + 28);
+      g.moveTo(x + 7, y + 18);
+      g.lineTo(x + 9, y + 28);
+      // Lower legs tucked back under desk (foreshortened)
+      g.lineStyle(4, colorDk, 0.55);
+      g.moveTo(x - 9, y + 28);
+      g.lineTo(x - 6, y + 22);
+      g.moveTo(x + 9, y + 28);
+      g.lineTo(x + 6, y + 22);
+      // Feet (small, resting on floor)
+      g.lineStyle(0);
+      g.beginFill(colorDk, 0.75);
+      g.drawRoundedRect(x - 14, y + 20, 8, 4, 2);
+      g.drawRoundedRect(x + 6, y + 20, 8, 4, 2);
+      g.endFill();
+    } else {
+      // Walking / standing legs
+      const legSwing = isWalking ? Math.sin(tk * 6) * 10 : Math.sin(tk * 1.5) * 2;
+      g.lineStyle(5, colorDk, 0.95);
+      g.moveTo(x - 7, y + 18);
+      g.lineTo(x - 10 + legSwing, y + 34);
+      g.lineTo(x - 14 + legSwing, y + 38);
+      g.moveTo(x + 7, y + 18);
+      g.lineTo(x + 10 - legSwing, y + 34);
+      g.lineTo(x + 14 - legSwing, y + 38);
+      g.lineStyle(0);
+      g.beginFill(colorDk, 0.9);
+      g.drawRoundedRect(x - 18 + legSwing, y + 36, 10, 5, 2);
+      g.drawRoundedRect(x + 8 - legSwing, y + 36, 10, 5, 2);
+      g.endFill();
+    }
 
     // ── Body ─────────────────────────────────────────────────────────────────
-    // Outer shell
     g.beginFill(color, 0.92);
     g.lineStyle(1.5, colorLt, 0.5);
     g.drawRoundedRect(x - 16, y - 16, 32, 34, 8);
@@ -210,12 +281,15 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     g.lineStyle(0.5, colorLt, 0.2);
     g.drawRoundedRect(x - 9, y - 4, 18, 16, 3);
     g.endFill();
-    // Status light on panel
-    const litColor = agent.status === 'working' ? 0x00ff88 :
-                     agent.status === 'thinking' ? 0xfbbf24 :
-                     agent.status === 'moving'   ? 0x00c8ff : 0x4a5568;
-    const litA = agent.status === 'working' ? 0.7 + Math.sin(tk * 8) * 0.3 : 0.85;
-    g.beginFill(litColor, litA);
+    // Status light
+    const litColor = agent.status === 'working'  ? 0x00ff88 :
+                     agent.status === 'thinking'  ? 0xfbbf24 :
+                     agent.status === 'moving'    ? 0x00c8ff : 0x4a5568;
+    const litPulse = agent.status === 'working'
+      ? 0.7 + Math.sin(tk * (isSeated ? 12 : 8)) * 0.3
+      : 0.85;
+    g.lineStyle(0);
+    g.beginFill(litColor, litPulse);
     g.drawCircle(x, y + 6, 3.5);
     g.endFill();
     // Panel grid lines
@@ -224,20 +298,41 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     g.moveTo(x - 9, y + 6); g.lineTo(x + 9, y + 6);
 
     // ── Arms ─────────────────────────────────────────────────────────────────
-    const armSwing = agent.status === 'working'
-      ? Math.sin(tk * 6) * 6
-      : Math.sin(tk * 1.8) * 3;
-    g.lineStyle(5, colorDk, 0.9);
-    g.moveTo(x - 16, y - 6);
-    g.lineTo(x - 26 + armSwing, y + 6);
-    g.moveTo(x + 16, y - 6);
-    g.lineTo(x + 26 - armSwing, y + 6);
-    // Hand caps
-    g.lineStyle(0);
-    g.beginFill(colorLt, 0.8);
-    g.drawCircle(x - 26 + armSwing, y + 6, 4);
-    g.drawCircle(x + 26 - armSwing, y + 6, 4);
-    g.endFill();
+    if (isSeated) {
+      // Arms reaching forward to keyboard — typing animation when working
+      const typingL = agent.status === 'working'
+        ? Math.sin(tk * 10) * 3
+        : Math.sin(tk * 1.8) * 1;
+      const typingR = agent.status === 'working'
+        ? Math.sin(tk * 10 + 0.8) * 3
+        : Math.sin(tk * 1.8 + 0.5) * 1;
+      g.lineStyle(5, colorDk, 0.9);
+      g.moveTo(x - 16, y - 6);
+      g.lineTo(x - 18, y + 15 + typingL);
+      g.moveTo(x + 16, y - 6);
+      g.lineTo(x + 18, y + 15 + typingR);
+      // Hands (on keyboard)
+      g.lineStyle(0);
+      g.beginFill(colorLt, 0.8);
+      g.drawCircle(x - 18, y + 15 + typingL, 3.5);
+      g.drawCircle(x + 18, y + 15 + typingR, 3.5);
+      g.endFill();
+    } else {
+      // Standing / walking arms
+      const armSwing = isWalking
+        ? Math.sin(tk * 6) * 8
+        : (agent.status === 'working' ? Math.sin(tk * 6) * 6 : Math.sin(tk * 1.8) * 3);
+      g.lineStyle(5, colorDk, 0.9);
+      g.moveTo(x - 16, y - 6);
+      g.lineTo(x - 26 + armSwing, y + 6);
+      g.moveTo(x + 16, y - 6);
+      g.lineTo(x + 26 - armSwing, y + 6);
+      g.lineStyle(0);
+      g.beginFill(colorLt, 0.8);
+      g.drawCircle(x - 26 + armSwing, y + 6, 4);
+      g.drawCircle(x + 26 - armSwing, y + 6, 4);
+      g.endFill();
+    }
 
     // ── Neck ─────────────────────────────────────────────────────────────────
     g.beginFill(colorDk, 0.9);
@@ -247,8 +342,12 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     // ── Head ─────────────────────────────────────────────────────────────────
     const headScale = agent.status === 'thinking' ? a.pulseR : 1;
     const headR = 16 * headScale;
-    const headY = y - 40;
-    // Head shell
+    // Typing head-nod when seated + working
+    const headNod = (isSeated && agent.status === 'working')
+      ? Math.sin(tk * 8) * 1.8
+      : 0;
+    const headY = y - 40 + headNod;
+
     g.beginFill(color, 0.97);
     g.lineStyle(1.5, colorLt, 0.6);
     g.drawCircle(x, headY, headR);
@@ -261,9 +360,11 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     g.lineStyle(0);
     const eyeA = 0.9 + Math.sin(tk * 3) * 0.1;
     const pupilSize = agent.status === 'thinking' ? 4 : 3;
+    // Narrowed eyes when seated working (focus/concentration look)
+    const eyeH = (isSeated && agent.status === 'working') ? 3.5 : 4.5;
     g.beginFill(0xffffff, 0.95);
-    g.drawCircle(x - 5, headY - 2, 4.5);
-    g.drawCircle(x + 5, headY - 2, 4.5);
+    g.drawEllipse(x - 5, headY - 2, 4.5, eyeH);
+    g.drawEllipse(x + 5, headY - 2, 4.5, eyeH);
     g.endFill();
     g.beginFill(colorDk, eyeA);
     g.drawCircle(x - 5, headY - 2, pupilSize);
@@ -277,8 +378,14 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     // Mouth
     g.lineStyle(1.5, colorDk, 0.7);
     if (agent.status === 'working') {
-      // Open mouth (working)
-      g.drawEllipse(x, headY + 7, 5, 3);
+      if (isSeated) {
+        // Pursed / focused mouth (typing concentration)
+        g.moveTo(x - 3, headY + 7);
+        g.lineTo(x + 3, headY + 7);
+      } else {
+        // Open mouth (active work, standing)
+        g.drawEllipse(x, headY + 7, 5, 3);
+      }
     } else if (agent.status === 'thinking') {
       // Neutral
       g.moveTo(x - 4, headY + 7); g.lineTo(x + 4, headY + 7);
@@ -297,7 +404,6 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     g.lineStyle(1.5, color, 0.85);
     g.moveTo(x - 6, headY - headR + 2); g.lineTo(antBx, antBy);
     g.moveTo(x + 6, headY - headR + 2); g.lineTo(antCx, antCy);
-    // Orbs
     const orbColor = agent.status === 'thinking' ? 0xfbbf24 :
                      agent.status === 'working'   ? 0x00ff88 : colorLt;
     const orbA = 0.7 + Math.sin(tk * 5) * 0.3;
@@ -306,21 +412,55 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     g.drawCircle(antBx, antBy, 3);
     g.drawCircle(antCx, antCy, 3);
     g.endFill();
-    // Orb glow
     g.beginFill(orbColor, orbA * 0.25);
     g.drawCircle(antBx, antBy, 7);
     g.drawCircle(antCx, antCy, 7);
     g.endFill();
 
-    // ── Role badge (floating above head) ────────────────────────────────────
-    // drawn as pill background
+    if (isOrchestrator) {
+      const crownY = headY - headR - 16;
+      g.beginFill(0xfbbf24, 0.95);
+      g.lineStyle(1.5, 0xfff1a8, 0.7);
+      g.drawPolygon([
+        x - 14, crownY + 10,
+        x - 10, crownY - 2,
+        x - 4, crownY + 8,
+        x, crownY - 8,
+        x + 4, crownY + 8,
+        x + 10, crownY - 2,
+        x + 14, crownY + 10,
+      ]);
+      g.endFill();
+      g.beginFill(0xb45309, 0.95);
+      g.lineStyle(1, 0xfff1a8, 0.45);
+      g.drawRoundedRect(x - 16, crownY + 8, 32, 6, 3);
+      g.endFill();
+      g.beginFill(0xfff1a8, 0.9);
+      g.drawCircle(x, crownY - 8, 2.5);
+      g.drawCircle(x - 10, crownY - 2, 2.1);
+      g.drawCircle(x + 10, crownY - 2, 2.1);
+      g.endFill();
+    }
+
+    // ── Role badge + completed_tasks counter ─────────────────────────────────
     const badgeW = 68, badgeH = 18;
     g.beginFill(0x000000, 0.62);
     g.lineStyle(1, color, 0.55);
     g.drawRoundedRect(x - badgeW / 2, headY - headR - 30, badgeW, badgeH, 9);
     g.endFill();
 
-    // Update text label position
+    // Tiny completed-tasks pip row (up to 5 pips)
+    if (agent.completed_tasks > 0) {
+      const pips = Math.min(agent.completed_tasks, 5);
+      const pipStart = x - (pips - 1) * 5;
+      for (let i = 0; i < pips; i++) {
+        g.beginFill(0x00ff88, 0.7);
+        g.drawCircle(pipStart + i * 10, headY - headR - 38, 2.5);
+        g.endFill();
+      }
+    }
+
+    // Update badge text position
     if (lblRef.current) {
       lblRef.current.x = x;
       lblRef.current.y = headY - headR - 26;
@@ -331,7 +471,6 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
     onAgentClick(agent.agent_id);
   }, [agent.agent_id, onAgentClick]);
 
-  // Codinome exibido no badge — ex: "ATLAS", "PIXEL", "ORACLE"
   const badgeLabel = agent.agent_name || agent.agent_role.split(' ')[0].toUpperCase();
 
   const labelStyle = new PIXI.TextStyle({
@@ -355,7 +494,7 @@ const AgentSprite: React.FC<AgentSpriteProps> = ({ agent, onAgentClick }) => {
         onclick={handleClick}
         ontouchstart={handleClick}
       />
-      {/* Codinome badge floating above head */}
+      {/* Codinome badge */}
       <Text
         ref={lblRef}
         text={badgeLabel}

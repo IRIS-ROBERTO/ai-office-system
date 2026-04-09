@@ -12,6 +12,22 @@ export interface AgentProfile {
 }
 
 export const AGENT_PROFILE_REGISTRY: Record<string, AgentProfile> = {
+  orchestrator_senior_01: {
+    codename: 'CROWN',
+    title: 'Senior Orchestrator & Approval Authority',
+    summary: 'Coordena a fila de demandas, decide prioridade, cobra criterio tecnico e fecha a entrega apenas quando o fluxo inteiro passou por validacao.',
+    mission: 'Transformar solicitacoes em execucao rastreavel, com testes, aprovacao e governanca operacional visivel para o escritorio inteiro.',
+    experience: 'Especialista em decomposicao de trabalho, governanca de runtime, quality gates e aprovacao final orientada a evidencia.',
+    signature: 'Nada sai como concluido sem teste, contexto e aprovacao final.',
+    personality: ['soberano', 'criterioso', 'imparcial', 'orientado a fluxo'],
+    strengths: ['triagem', 'priorizacao', 'quality gate', 'aprovacao final', 'governanca operacional'],
+    toolkit: ['LangGraph', 'quality gates', 'backlog orchestration', 'runtime telemetry'],
+    careerHighlights: [
+      'Centraliza a entrada de demandas e define o fluxo de execucao.',
+      'Controla aprovacao final com criterio tecnico explicito.',
+      'Mantem a disciplina operacional entre solicitacao, teste e entrega.'
+    ],
+  },
   dev_planner_01: {
     codename: 'ATLAS',
     title: 'Software Architect & Planning Lead',

@@ -353,6 +353,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ agentId, onClose }) => {
     : 100;
   const latestActivity = activity[0];
   const headerGlow = `${agent.color}33`;
+  const isOrchestrator = agent.team === 'orchestrator' || agent.agent_role.toLowerCase().includes('orchestrator');
 
   return (
     <div style={panelStyles.backdrop} onClick={handleBackdropClick}>
@@ -372,6 +373,26 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ agentId, onClose }) => {
               <div style={panelStyles.roleLine}>
                 {agent.team.toUpperCase()} / {agent.agent_role} / {agent.agent_id}
               </div>
+              {isOrchestrator ? (
+                <div style={{
+                  marginTop: 8,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '5px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(251,191,36,0.12)',
+                  border: '1px solid rgba(251,191,36,0.35)',
+                  color: '#fbbf24',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: 0.8,
+                  textTransform: 'uppercase',
+                }}>
+                  <span>♛</span>
+                  Approval Authority
+                </div>
+              ) : null}
             </div>
           </div>
           <button style={panelStyles.closeBtn} onClick={onClose} aria-label="Close">
