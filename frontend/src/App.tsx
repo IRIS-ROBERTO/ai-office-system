@@ -9,6 +9,7 @@ import { useOfficeStore } from './state/officeStore';
 const OfficeLayout = lazy(() => import('./engine/OfficeLayout'));
 const AgentPanel = lazy(() => import('./components/ui/AgentPanel'));
 const ActivityFeed = lazy(() => import('./components/ui/ActivityFeed'));
+const RequestDesk = lazy(() => import('./components/ui/RequestDesk'));
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // ─── Color tokens ─────────────────────────────────────────────────────────────
@@ -286,6 +287,7 @@ const EmptyState: React.FC<{ connected: boolean }> = ({ connected }) => {
 export default function App() {
   const { connected } = useEventStream();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'office' | 'requests'>('office');
   const agents = useOfficeStore(s => s.agents);
   const hydrateAgents = useOfficeStore(s => s.hydrateAgents);
   const agentArr = Object.values(agents);
@@ -302,6 +304,12 @@ export default function App() {
   }, []);
 
   const handleClosePanel = useCallback(() => setSelectedAgentId(null), []);
+  const handleTabChange = useCallback((tab: 'office' | 'requests') => {
+    setActiveTab(tab);
+    if (tab !== 'office') {
+      setSelectedAgentId(null);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -394,6 +402,37 @@ export default function App() {
 
         <div style={{ width: 1, height: 30, background: C.border, flexShrink: 0 }} />
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {[
+            { id: 'office' as const, label: 'Office' },
+            { id: 'requests' as const, label: 'Solicitacoes' },
+          ].map(tab => {
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => handleTabChange(tab.id)}
+                style={{
+                  border: `1px solid ${active ? C.borderGold : C.border}`,
+                  background: active ? 'rgba(251,191,36,0.12)' : 'rgba(255,255,255,0.03)',
+                  color: active ? C.textGold : C.textSecondary,
+                  borderRadius: 999,
+                  padding: '7px 12px',
+                  fontSize: 10,
+                  letterSpacing: 1.1,
+                  textTransform: 'uppercase',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ width: 1, height: 30, background: C.border, flexShrink: 0 }} />
+
         {/* Team chips */}
         <TeamChip label="DEV" count={devAgents.length} working={devWorking}
           color={C.textDev} border={C.borderDev} />
@@ -418,71 +457,79 @@ export default function App() {
       {/* ── MAIN AREA ────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-        {/* Canvas area */}
-        <div style={{
-          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: C.bg, position: 'relative', overflow: 'hidden',
-        }}>
-          {/* Vignette overlay */}
-          <div style={{
-            position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1,
-            background: 'radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(3,3,10,0.6) 100%)',
-          }} />
-
-          <div ref={containerRef} style={{
-            transform: `scale(${scale})`, transformOrigin: 'center center',
-            lineHeight: 0, position: 'relative',
-          }}>
-            <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading office renderer...</div>}>
-              <OfficeLayout onAgentClick={handleAgentClick} />
-            </Suspense>
-          </div>
-
-          {/* Empty state */}
-          {agentCount === 0 && <EmptyState connected={connected} />}
-        </div>
-
-        {/* ── RIGHT SIDEBAR ─────────────────────────────────────────────── */}
-        {agentCount > 0 && (
-          <div style={{
-            width: 252, flexShrink: 0,
-            background: 'rgba(5, 5, 14, 0.92)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            borderLeft: `1px solid ${C.border}`,
-            display: 'flex', flexDirection: 'column',
-            overflow: 'hidden',
-          }}>
-            {/* Agents section */}
+        {activeTab === 'office' ? (
+          <>
+            {/* Canvas area */}
             <div style={{
-              padding: '14px 14px 10px',
-              borderBottom: `1px solid ${C.border}`,
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: C.bg, position: 'relative', overflow: 'hidden',
             }}>
-              <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 2,
-                textTransform: 'uppercase', marginBottom: 10 }}>
-                Active Agents
+              {/* Vignette overlay */}
+              <div style={{
+                position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1,
+                background: 'radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(3,3,10,0.6) 100%)',
+              }} />
+
+              <div ref={containerRef} style={{
+                transform: `scale(${scale})`, transformOrigin: 'center center',
+                lineHeight: 0, position: 'relative',
+              }}>
+                <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading office renderer...</div>}>
+                  <OfficeLayout onAgentClick={handleAgentClick} />
+                </Suspense>
               </div>
-              <AgentRoster onAgentClick={handleAgentClick} selectedId={selectedAgentId} />
+
+              {/* Empty state */}
+              {agentCount === 0 && <EmptyState connected={connected} />}
             </div>
 
-            {/* Activity Feed */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <div style={{ padding: '10px 14px 6px',
-                borderBottom: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 2, textTransform: 'uppercase' }}>
-                  Event Stream
+            {/* ── RIGHT SIDEBAR ─────────────────────────────────────────────── */}
+            {agentCount > 0 && (
+              <div style={{
+                width: 252, flexShrink: 0,
+                background: 'rgba(5, 5, 14, 0.92)',
+                backdropFilter: 'blur(16px)',
+                WebkitBackdropFilter: 'blur(16px)',
+                borderLeft: `1px solid ${C.border}`,
+                display: 'flex', flexDirection: 'column',
+                overflow: 'hidden',
+              }}>
+                {/* Agents section */}
+                <div style={{
+                  padding: '14px 14px 10px',
+                  borderBottom: `1px solid ${C.border}`,
+                }}>
+                  <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 2,
+                    textTransform: 'uppercase', marginBottom: 10 }}>
+                    Active Agents
+                  </div>
+                  <AgentRoster onAgentClick={handleAgentClick} selectedId={selectedAgentId} />
+                </div>
+
+                {/* Activity Feed */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px 6px',
+                    borderBottom: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 2, textTransform: 'uppercase' }}>
+                      Event Stream
+                    </div>
+                  </div>
+                  <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading event stream...</div>}>
+                    <ActivityFeed />
+                  </Suspense>
                 </div>
               </div>
-              <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading event stream...</div>}>
-                <ActivityFeed />
-              </Suspense>
-            </div>
-          </div>
+            )}
+          </>
+        ) : (
+          <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading request desk...</div>}>
+            <RequestDesk apiUrl={API_URL} />
+          </Suspense>
         )}
       </div>
 
       {/* ── AGENT DETAIL PANEL (floating) ────────────────────────────────── */}
-      {selectedAgentId && (
+      {activeTab === 'office' && selectedAgentId && (
         <Suspense fallback={null}>
           <AgentPanel agentId={selectedAgentId} onClose={handleClosePanel} />
         </Suspense>
