@@ -40,3 +40,40 @@ class SystemHealth(BaseModel):
 class EventHistoryResponse(BaseModel):
     events: list[dict]
     total: int
+
+
+class ServiceRequestCreate(BaseModel):
+    title: str
+    team: str
+    request: str
+    requester_name: Optional[str] = None
+    requester_team: Optional[str] = None
+    urgency: str = "medium"
+    desired_due_date: Optional[str] = None
+    acceptance_criteria: Optional[str] = None
+
+
+class ServiceRequestResponse(BaseModel):
+    request_id: str
+    title: str
+    team: str
+    status: str
+    stage_label: str
+    requester_name: Optional[str] = None
+    requester_team: Optional[str] = None
+    urgency: str
+    priority: int
+    desired_due_date: Optional[str] = None
+    acceptance_criteria: Optional[str] = None
+    request: str
+    task_id: Optional[str] = None
+    current_agent_role: Optional[str] = None
+    tested_by_team: bool
+    approved_by_orchestrator: bool
+    created_at: str
+    updated_at: str
+
+
+class ServiceRequestListResponse(BaseModel):
+    items: list[ServiceRequestResponse]
+    total: int
