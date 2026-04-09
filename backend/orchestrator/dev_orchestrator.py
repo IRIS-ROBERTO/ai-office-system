@@ -79,7 +79,10 @@ class DevOrchestrator(BaseOrchestrator):
             tasks=[],          # Tasks are injected dynamically per subtask
             process=Process.sequential,
             verbose=True,
-            memory=False,      # Memory managed by LangGraph state, not CrewAI
+            # CrewAI memory estava quebrando o runtime local por exigir
+            # configuração adicional de embeddings no ambiente.
+            # Mantemos o fluxo determinístico sem bloquear a entrega.
+            memory=False,
         )
 
         logger.info(

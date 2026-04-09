@@ -188,9 +188,11 @@ def get_crewai_llm_str(role: str = "general") -> str:
         "security":  f"ollama/qwen3-vl:8b",
         "docs":      f"ollama/{settings.LOCAL_MODEL_DOCS}",   # iris-comments
         # Marketing Team
-        "research":  f"ollama/{settings.LOCAL_MODEL_GENERAL}",  # llama3.1:8b
-        "strategy":  f"ollama/qwen3-vl:8b",
-        "content":   f"ollama/{settings.LOCAL_MODEL_GENERAL}",
+        # Marketing estava estourando VRAM com modelos maiores durante retries.
+        # Usamos perfis mais leves para manter throughput e evitar stalls silenciosos.
+        "research":  f"ollama/{settings.LOCAL_MODEL_FALLBACK}",  # qwen2.5:7b
+        "strategy":  f"ollama/{settings.LOCAL_MODEL_FALLBACK}",  # qwen2.5:7b
+        "content":   f"ollama/{settings.LOCAL_MODEL_FALLBACK}",  # qwen2.5:7b
         "seo":       f"ollama/{settings.LOCAL_MODEL_FAST}",     # iris-fast
         "social":    f"ollama/{settings.LOCAL_MODEL_FAST}",
         "analytics": f"ollama/qwen3-vl:8b",
