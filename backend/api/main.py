@@ -3,10 +3,20 @@ AI Office System — FastAPI Main Application
 Entrada HTTP/WebSocket do sistema. Gerencia tarefas, agentes e saúde.
 """
 import asyncio
+import json
 import logging
+import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,8 +32,13 @@ from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamTy
 from backend.core.runtime_registry import agent_registry, seed_agent_registry
 from backend.core.improvement_loop import improvement_loop
 from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_handoff
+from backend.core.agent_personality import get_agent_config, update_agent_config
+from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
 from backend.config.settings import settings
+from backend.tools.brain_router import get_brain_status
+from backend.tools.model_gate import gate
 from backend.tools.ollama_tool import check_ollama_health
+from backend.tools.picoclaw_tool import check_picoclaw_health, get_picoclaw_status
 from backend.orchestrator import DevOrchestrator, MarketingOrchestrator
 from backend.api.schemas import (
     TaskRequest,
@@ -36,6 +51,9 @@ from backend.api.schemas import (
     ServiceRequestResponse,
     ExecutionLogEntryResponse,
     ExecutionLogResponse,
+    AgentCapabilities,
+    AgentPersonalityConfig,
+    AgentPersonalityUpdate,
 )
 from backend.api.websocket import websocket_endpoint
 
@@ -104,6 +122,8 @@ def _make_task_state(task_id: str, team: str, request: str, priority: int) -> Ta
         subtasks=[],
         current_subtask_index=0,
         agent_outputs={},
+        delivery_evidence={},
+        delivery_manifests={},
         quality_approved=False,
         retry_count=0,
         final_output=None,
@@ -174,6 +194,15 @@ def _derive_service_request_progress(service_request: dict, task_state: TaskStat
     elif task_state.get("team") == "dev":
         tested_by_team = False
 
+    if errors:
+        return {
+            "status": "failed",
+            "stage_label": "Falha de gate",
+            "current_agent_role": current_role or "orchestrator",
+            "tested_by_team": tested_by_team,
+            "approved_by_orchestrator": False,
+        }
+
     approved_by_orchestrator = bool(task_state.get("final_output"))
 
     if approved_by_orchestrator:
@@ -237,6 +266,14 @@ def _derive_service_request_progress(service_request: dict, task_state: TaskStat
         "tested_by_team": tested_by_team,
         "approved_by_orchestrator": False,
     }
+
+
+def _is_task_still_active(task_state: TaskState) -> bool:
+    if task_state.get("final_output"):
+        return False
+    if task_state.get("errors"):
+        return False
+    return True
 
 
 def _sync_service_request(task_id: str) -> None:
@@ -306,7 +343,8 @@ def _make_progress_callback(task_id: str):
         if task_id in _active_tasks:
             # Merge only the fields that changed
             for key in ("senior_directive", "subtasks", "current_subtask_index",
-                        "agent_outputs", "quality_approved", "final_output", "errors"):
+                        "agent_outputs", "delivery_evidence", "delivery_manifests",
+                        "quality_approved", "final_output", "errors"):
                 if key in intermediate_state and intermediate_state[key] is not None:
                     _active_tasks[task_id][key] = intermediate_state[key]
             _sync_service_request(task_id)
@@ -442,6 +480,28 @@ async def get_task_execution_log(task_id: str):
     return ExecutionLogResponse(task_id=task_id, items=items, total=len(items))
 
 
+@app.get("/tasks/{task_id}/delivery-manifests")
+async def get_task_delivery_manifests(task_id: str):
+    """Retorna manifestos determinísticos gerados pelo Delivery Runner."""
+    task = _active_tasks.get(task_id)
+    if task is not None:
+        manifests = task.get("delivery_manifests") or {}
+        return {"task_id": task_id, "items": manifests, "total": len(manifests)}
+
+    manifest_dir = Path(".runtime") / "delivery-manifests" / task_id
+    if not manifest_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' não encontrada.")
+
+    items: dict[str, dict] = {}
+    for file_path in sorted(manifest_dir.glob("*.json")):
+        try:
+            items[file_path.stem] = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            items[file_path.stem] = {"error": str(exc), "manifest_path": str(file_path)}
+
+    return {"task_id": task_id, "items": items, "total": len(items)}
+
+
 @app.post("/service-requests", response_model=ServiceRequestResponse, status_code=202)
 async def create_service_request(body: ServiceRequestCreate, background_tasks: BackgroundTasks):
     """Cria uma solicitação formal para um time e já a liga ao runtime do escritório."""
@@ -537,6 +597,47 @@ async def list_agents():
     ]
 
 
+@app.get("/agents/{agent_id}/config", response_model=AgentPersonalityConfig)
+async def get_agent_personality_config(agent_id: str):
+    """Retorna a configuracao editavel de personalidade e operacao do agente."""
+    seed_agent_registry()
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
+    return AgentPersonalityConfig(**get_agent_config(agent))
+
+
+@app.patch("/agents/{agent_id}/config", response_model=AgentPersonalityConfig)
+async def patch_agent_personality_config(agent_id: str, body: AgentPersonalityUpdate):
+    """Atualiza a configuracao operacional usada em futuras execucoes do agente."""
+    seed_agent_registry()
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
+
+    payload = body.model_dump(exclude_unset=True)
+    config = update_agent_config(agent, payload)
+    return AgentPersonalityConfig(**config)
+
+
+@app.get("/agents/{agent_id}/capabilities", response_model=AgentCapabilities)
+async def get_agent_capabilities(agent_id: str):
+    """Retorna as ferramentas e MCPs liberados para o papel do agente."""
+    seed_agent_registry()
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
+
+    role = str(agent["agent_role"])
+    return AgentCapabilities(
+        agent_id=agent_id,
+        role=role,
+        team=str(agent["team"]),
+        tool_policy=get_role_tool_policy(role),
+        picoclaw=get_picoclaw_status(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes — Health
 # ---------------------------------------------------------------------------
@@ -547,12 +648,16 @@ async def health_check():
     """
     # Redis
     redis_status = "offline"
+    event_bus_status = event_bus.mode
+    event_bus_persistent = event_bus.is_persistent
     try:
-        if event_bus._redis is not None:
+        if event_bus.is_available:
             await event_bus._redis.ping()
-            redis_status = "online"
+            redis_status = "online" if event_bus.is_persistent else "degraded_fake"
     except Exception as exc:
         logger.warning(f"[Health] Redis ping falhou: {exc}")
+        event_bus_status = "offline"
+        event_bus_persistent = False
 
     # Ollama
     ollama_info = await check_ollama_health()
@@ -563,15 +668,50 @@ async def health_check():
         m["name"] if isinstance(m, dict) else str(m) for m in raw_models
     ]
 
-    active_tasks_count = len(_active_tasks)
+    active_tasks_count = sum(
+        1 for task_state in _active_tasks.values() if _is_task_still_active(task_state)
+    )
 
     return SystemHealth(
         api="online",
         redis=redis_status,
+        event_bus=event_bus_status,
+        event_bus_persistent=event_bus_persistent,
         ollama=ollama_status,
         available_models=available_models,
+        brain_router=get_brain_status(),
+        model_gate=gate.get_usage_summary(),
+        picoclaw=await check_picoclaw_health(),
         active_tasks=active_tasks_count,
     )
+
+
+@app.get("/models/brain-router")
+async def get_brain_router_status():
+    """Retorna perfis de cerebro por agente e selecoes recentes de modelo."""
+    return get_brain_status()
+
+
+@app.get("/models/approved")
+async def list_approved_models():
+    """Lista modelos liberados pelo gate de custo e seguranca."""
+    return {"items": gate.list_approved(), "usage": gate.get_usage_summary()}
+
+
+@app.get("/integrations/picoclaw")
+async def get_picoclaw_integration_status():
+    """Retorna status e politica operacional do PicoClaw MCP bridge."""
+    return {
+        "runtime": await check_picoclaw_health(),
+        "config": get_picoclaw_status(),
+        "policy": list_tool_policies(),
+    }
+
+
+@app.get("/tool-governance")
+async def get_tool_governance():
+    """Retorna a matriz de permissao para MCPs e ferramentas de agentes."""
+    return list_tool_policies()
 
 
 # ---------------------------------------------------------------------------

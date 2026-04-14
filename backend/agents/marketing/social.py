@@ -9,8 +9,11 @@ autêntico e campanhas que fazem as pessoas se identificarem.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.n8n_tool import n8n_workflow_tool
+from backend.tools.notion_tool import notion_write_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -83,7 +86,7 @@ def create_social_agent() -> Agent:
          calendários editoriais e copies de alto engajamento em volume.
     Tools: github_commit_tool — commita calendários e conteúdos no repositório.
     """
-    llm = get_crewai_llm_str("social")
+    llm = get_crewai_llm_for_agent("social", AGENT_ID)
 
     agent = Agent(
         role="Social Media Manager",
@@ -107,9 +110,14 @@ def create_social_agent() -> Agent:
             "reactive content e trending topics entram em tempo real quando fazem sentido "
             "para a marca, nunca apenas para engajamento vazio."
         ),
-        tools=[github_commit_tool],
+        tools=[
+            github_commit_tool,
+            n8n_workflow_tool,
+            notion_write_tool,
+            get_picoclaw_mcp_tool("social", AGENT_ID),
+        ],
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
         memory=False,

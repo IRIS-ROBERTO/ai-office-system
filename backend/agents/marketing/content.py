@@ -9,8 +9,12 @@ conversão e inbound marketing de alta performance.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.search_tools import web_search_tool
+from backend.tools.notion_tool import notion_write_tool
+from backend.tools.n8n_tool import n8n_workflow_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -83,7 +87,7 @@ def create_content_agent() -> Agent:
          de conteúdo persuasivo, narrativo e otimizado para conversão.
     Tools: github_commit_tool — commita conteúdos produzidos no repositório.
     """
-    llm = get_crewai_llm_str("content")
+    llm = get_crewai_llm_for_agent("content", AGENT_ID)
 
     agent = Agent(
         role="Content Creator & Copywriter",
@@ -105,9 +109,15 @@ def create_content_agent() -> Agent:
             "Transformar jargão técnico em linguagem que faz o tomador de decisão dizer "
             "'é exatamente isso que eu precisava ouvir'."
         ),
-        tools=[github_commit_tool],
+        tools=[
+            github_commit_tool,
+            web_search_tool,
+            notion_write_tool,
+            n8n_workflow_tool,
+            get_picoclaw_mcp_tool("content", AGENT_ID),
+        ],
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
         memory=False,

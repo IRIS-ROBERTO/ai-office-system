@@ -9,9 +9,11 @@ Obsessão por performance, acessibilidade e zero erros de compilação.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.workspace_tool import workspace_file_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
+
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
@@ -74,7 +76,7 @@ def create_frontend_agent() -> Agent:
          para geração de código TypeScript/React de alta precisão.
     Tools: github_commit_tool — commita componentes e páginas no repositório.
     """
-    llm = get_crewai_llm_str("frontend")
+    llm = get_crewai_llm_for_agent("frontend", AGENT_ID)
 
     agent = Agent(
         role="Frontend Engineer",
@@ -99,10 +101,10 @@ def create_frontend_agent() -> Agent:
             "discutir agora do que refatorar depois que o usuário reclamar."
         ),
         llm=llm,
-        tools=[github_commit_tool],
-        verbose=True,
+        tools=[workspace_file_tool, github_commit_tool],
+        verbose=False,
         allow_delegation=False,
-        max_iter=15,
+        max_iter=8,
         memory=False,
     )
 

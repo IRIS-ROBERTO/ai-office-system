@@ -21,9 +21,12 @@ from langgraph.graph import END, StateGraph
 from langchain_core.messages import HumanMessage, AIMessage
 
 from backend.config.settings import settings
+from backend.core.delivery_evidence import validate_delivery_evidence
+from backend.core.delivery_runner import delivery_runner
 from backend.core.event_bus import event_bus
 from backend.core.execution_trace import append_execution_log
 from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamType
+from backend.core.gold_standard import REPO_ROOT, build_gold_standard_prompt
 from backend.core.improvement_loop import improvement_loop
 from backend.core.state import TaskState
 from backend.tools.ollama_tool import get_senior_llm
@@ -269,6 +272,10 @@ class BaseOrchestrator(ABC):
             "  ]\n"
             "}\n\n"
             f"Roles disponíveis: {self._available_roles()}\n"
+            "Regra de roteamento: assigned_role deve conter exatamente UM role disponível, "
+            "sem vírgulas e sem múltiplos responsáveis. Se houver colaboração, crie subtarefas separadas.\n"
+            "Cada subtarefa versionável deve incluir nos critérios: alteração real via workspace_file, "
+            "validação objetiva, commit local via github_commit e DELIVERY_EVIDENCE com SHA real.\n"
             "Gere entre 2 e 6 subtarefas. Não inclua texto fora do JSON."
         )
 
@@ -500,6 +507,14 @@ class BaseOrchestrator(ABC):
         crewai_agent = self._find_agent_by_role(role)
 
         # Build a CrewAI Task from the subtask spec
+        retry_feedback = (state.get("agent_outputs") or {}).get(f"{subtask['id']}_feedback", "")
+        retry_section = (
+            "\n\n## Feedback obrigatorio da tentativa anterior\n"
+            f"{retry_feedback}\n"
+            "Corrija exatamente estes pontos antes de responder novamente.\n"
+            if retry_feedback
+            else ""
+        )
         crewai_task = Task(
             description=(
                 f"{state['senior_directive']}\n\n"
@@ -507,7 +522,34 @@ class BaseOrchestrator(ABC):
                 f"**Título:** {subtask['title']}\n\n"
                 f"**Descrição:** {subtask['description']}\n\n"
                 f"**Critérios de Aceitação:**\n{subtask['acceptance_criteria']}\n\n"
-                f"**Contexto completo da requisição:**\n{state['original_request']}"
+                f"**Contexto completo da requisição:**\n{state['original_request']}\n\n"
+                f"{retry_section}"
+                f"{build_gold_standard_prompt(role=role, agent_id=agent_id)}\n\n"
+                "## Regra obrigatória de versionamento\n"
+                "Se você produzir qualquer artefato versionável (código, documentação, teste, "
+                "conteúdo ou configuração), deve usar a tool `github_commit` em modo local "
+                "com `repo_path`, `file_paths` e `commit_message` para fazer git add e git commit "
+                "no repositório local.\n"
+                f"Use repo_path='{REPO_ROOT}' para alterar o IRIS. Para projeto gerado, use a raiz git/worktree que contém o projeto em IRIS_GENERATED_PROJECTS. Use push=false se o remoto não estiver disponível.\n"
+                "Nunca conclua a subtarefa sem evidência explícita do commit real retornado pela tool.\n"
+                "No seu output final, inclua exatamente este bloco parseável:\n"
+                "DELIVERY_EVIDENCE\n"
+                f"agent: {agent_id}\n"
+                f"task_id: {task_id}\n"
+                f"subtask_id: {subtask['id']}\n"
+                "repo_path: caminho_absoluto_do_repositorio_git_usado\n"
+                "files_changed:\n"
+                "- path/do/arquivo\n"
+                "validation:\n"
+                "- command: comando executado\n"
+                "  result: passed|failed|not_applicable\n"
+                "commit:\n"
+                "  message: mensagem do commit\n"
+                "  sha: sha_curto\n"
+                "  pushed: true|false\n"
+                "risks:\n"
+                "- none\n"
+                "next_handoff: none\n"
             ),
             expected_output=subtask["acceptance_criteria"],
             agent=crewai_agent,
@@ -565,6 +607,86 @@ class BaseOrchestrator(ABC):
         # Accumulate outputs
         updated_outputs = dict(state.get("agent_outputs") or {})
         updated_outputs[subtask["id"]] = output_text
+        updated_evidence = dict(state.get("delivery_evidence") or {})
+        updated_manifests = dict(state.get("delivery_manifests") or {})
+
+        manifest = delivery_runner.evaluate_subtask_output(
+            task_id=task_id,
+            subtask=subtask,
+            output_text=output_text,
+            agent_id=agent_id,
+            agent_role=agent_role_enum.value,
+            team=self.team.value,
+            require_commit=True,
+        )
+        updated_manifests[subtask["id"]] = manifest.to_dict()
+        self._trace(
+            task_id,
+            "delivery_manifest",
+            f"Delivery Runner avaliou '{subtask['title']}' com approved={manifest.approved}.",
+            agent_id=self.ORCHESTRATOR_AGENT_ID,
+            agent_role=AgentRole.ORCHESTRATOR.value,
+            metadata={
+                "subtask_id": subtask["id"],
+                "approved": manifest.approved,
+                "manifest_path": manifest.manifest_path,
+                "failed_stages": [
+                    stage.name for stage in manifest.stages if stage.required and not stage.passed
+                ],
+            },
+        )
+
+        evidence_payload = dict(manifest.evidence or {})
+        if evidence_payload:
+            evidence_payload["approved"] = manifest.approved
+            evidence_payload["feedback"] = manifest.feedback
+            evidence_payload["manifest_path"] = manifest.manifest_path
+            updated_evidence[subtask["id"]] = evidence_payload
+
+            commit_sha = str(evidence_payload.get("commit_sha") or "")
+            if manifest.approved and commit_sha:
+                await _emit(
+                    EventType.GIT_COMMIT,
+                    self.team,
+                    agent_id,
+                    agent_role_enum,
+                    task_id=task_id,
+                    payload={
+                        "subtask_id": subtask["id"],
+                        "sha": commit_sha,
+                        "message": evidence_payload.get("commit_message"),
+                        "files": evidence_payload.get("files_changed"),
+                        "pushed": evidence_payload.get("pushed"),
+                        "manifest_path": manifest.manifest_path,
+                    },
+                )
+                if evidence_payload.get("pushed"):
+                    await _emit(
+                        EventType.GIT_PUSH,
+                        self.team,
+                        agent_id,
+                        agent_role_enum,
+                        task_id=task_id,
+                        payload={
+                            "subtask_id": subtask["id"],
+                            "sha": commit_sha,
+                            "files": evidence_payload.get("files_changed"),
+                            "manifest_path": manifest.manifest_path,
+                        },
+                    )
+        else:
+            await _emit(
+                EventType.COMMIT_FAILED,
+                self.team,
+                agent_id,
+                agent_role_enum,
+                task_id=task_id,
+                payload={
+                    "subtask_id": subtask["id"],
+                    "reason": manifest.feedback,
+                    "manifest_path": manifest.manifest_path,
+                },
+            )
 
         logger.info(
             f"[execute_subtask] Subtarefa '{subtask['title']}' concluída. "
@@ -581,7 +703,8 @@ class BaseOrchestrator(ABC):
 
         result = {
             "agent_outputs": updated_outputs,
-            "retry_count": 0,
+            "delivery_evidence": updated_evidence,
+            "delivery_manifests": updated_manifests,
         }
         # Report progress after each subtask completion
         merged = {**state, **result}
@@ -609,6 +732,68 @@ class BaseOrchestrator(ABC):
         agent_id = self._role_to_agent_id(role)
         agent_role_enum = self._role_to_enum(role)
 
+        deterministic_gate = validate_delivery_evidence(
+            output_text,
+            task_id=task_id,
+            subtask_id=subtask["id"],
+            require_commit=True,
+        )
+        if not deterministic_gate.approved:
+            retry_count = state.get("retry_count", 0) + 1
+            updated_outputs = dict(agent_outputs)
+            updated_outputs[f"{subtask['id']}_feedback"] = deterministic_gate.feedback
+            updated_evidence = dict(state.get("delivery_evidence") or {})
+            if deterministic_gate.evidence:
+                payload = deterministic_gate.evidence.to_dict()
+                payload["approved"] = False
+                payload["feedback"] = deterministic_gate.feedback
+                updated_evidence[subtask["id"]] = payload
+
+            self._trace(
+                task_id,
+                "deterministic_gate_failed",
+                f"Evidencia deterministica reprovou '{subtask['title']}': {deterministic_gate.feedback}",
+                level="warning",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"], "retry_count": retry_count},
+            )
+
+            if retry_count >= MAX_RETRIES:
+                errors = list(state.get("errors") or [])
+                errors.append(
+                    f"Subtarefa '{subtask['title']}' reprovada por falta de evidência após "
+                    f"{MAX_RETRIES} tentativas. Último feedback: {deterministic_gate.feedback}"
+                )
+                await _emit(
+                    EventType.TASK_FAILED,
+                    self.team,
+                    agent_id,
+                    agent_role_enum,
+                    task_id=task_id,
+                    payload={
+                        "subtask_id": subtask["id"],
+                        "feedback": deterministic_gate.feedback,
+                        "retry_count": retry_count,
+                    },
+                )
+                return {
+                    "quality_approved": False,
+                    "retry_count": retry_count,
+                    "agent_outputs": updated_outputs,
+                    "delivery_evidence": updated_evidence,
+                    "errors": errors,
+                    "current_subtask_index": idx,
+                }
+
+            return {
+                "quality_approved": False,
+                "retry_count": retry_count,
+                "agent_outputs": updated_outputs,
+                "delivery_evidence": updated_evidence,
+                "current_subtask_index": idx,
+            }
+
         if not settings.QUALITY_GATE_ENABLED:
             logger.info("[quality_gate] Gate desabilitado — aprovação automática.")
             await _emit(
@@ -630,6 +815,9 @@ class BaseOrchestrator(ABC):
             f"**Subtarefa:** {subtask['title']}\n"
             f"**Critérios de Aceitação:** {subtask['acceptance_criteria']}\n\n"
             f"**Output produzido pelo agente:**\n{output_text}\n\n"
+            "Regra adicional obrigatória: se a subtarefa gera artefatos versionáveis, o output "
+            "precisa conter evidência explícita de commit (arquivos alterados + mensagem + SHA "
+            "ou saída da tool github_commit). Se não houver essa evidência, aprove como false.\n\n"
             "Avalie se o output atende COMPLETAMENTE os critérios de aceitação.\n"
             "Responda APENAS com JSON válido:\n"
             '{"approved": true, "feedback": "..."}\n'
@@ -766,13 +954,16 @@ class BaseOrchestrator(ABC):
     async def _aggregate_results_node(self, state: TaskState) -> dict:
         """
         Aggregates all agent_outputs into a final_output string.
-        Emits a global TASK_COMPLETED event.
+        Emits a global TASK_COMPLETED event when clean, or TASK_FAILED when any
+        deterministic/quality gate errors were collected.
 
-        Emits: TASK_COMPLETED
+        Emits: TASK_COMPLETED or TASK_FAILED
         """
         task_id = state["task_id"]
         subtasks = state["subtasks"]
         agent_outputs = state.get("agent_outputs") or {}
+        delivery_evidence = state.get("delivery_evidence") or {}
+        delivery_manifests = state.get("delivery_manifests") or {}
         errors = state.get("errors") or []
 
         sections: list[str] = []
@@ -782,18 +973,42 @@ class BaseOrchestrator(ABC):
         for subtask in subtasks:
             sid = subtask["id"]
             output = agent_outputs.get(sid, "(sem output)")
+            evidence = delivery_evidence.get(sid)
             sections.append(
                 f"## [{subtask['assigned_role'].upper()}] {subtask['title']}\n"
                 f"{output}\n"
             )
+            if evidence:
+                sections.append(
+                    "### Delivery Evidence\n"
+                    f"- Commit: {evidence.get('commit_sha') or 'n/a'}\n"
+                    f"- Pushed: {evidence.get('pushed')}\n"
+                    f"- Files: {', '.join(evidence.get('files_changed') or []) or 'n/a'}\n"
+                    f"- Gate: {evidence.get('feedback') or 'n/a'}\n"
+                    f"- Manifest: {evidence.get('manifest_path') or 'n/a'}\n"
+                )
+            manifest = delivery_manifests.get(sid)
+            if manifest:
+                failed_stages = [
+                    item.get("name")
+                    for item in manifest.get("stages", [])
+                    if item.get("required") and item.get("status") != "passed"
+                ]
+                sections.append(
+                    "### Delivery Manifest\n"
+                    f"- Approved: {manifest.get('approved')}\n"
+                    f"- Path: {manifest.get('manifest_path') or 'n/a'}\n"
+                    f"- Failed stages: {', '.join(failed_stages) if failed_stages else 'none'}\n"
+                )
 
         if errors:
             sections.append(f"## Erros Registrados\n" + "\n".join(f"- {e}" for e in errors))
 
         final_output = "\n".join(sections)
 
+        final_event_type = EventType.TASK_FAILED if errors else EventType.TASK_COMPLETED
         await _emit(
-            EventType.TASK_COMPLETED,
+            final_event_type,
             self.team,
             self.ORCHESTRATOR_AGENT_ID,
             AgentRole.ORCHESTRATOR,
@@ -806,13 +1021,14 @@ class BaseOrchestrator(ABC):
         )
 
         logger.info(
-            f"[aggregate] Tarefa {task_id} concluída. "
+            f"[aggregate] Tarefa {task_id} agregada. "
             f"{len(subtasks)} subtarefas, {len(errors)} erros."
         )
         self._trace(
             task_id,
             "aggregation_complete",
             f"Tarefa agregada pelo orquestrador com {len(subtasks)} subtarefas e {len(errors)} erros.",
+            level="error" if errors else "info",
             agent_id=self.ORCHESTRATOR_AGENT_ID,
             agent_role=AgentRole.ORCHESTRATOR.value,
             metadata={"subtask_count": len(subtasks), "error_count": len(errors)},

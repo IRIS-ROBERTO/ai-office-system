@@ -9,8 +9,10 @@ Transforma presença digital em tráfego orgânico qualificado e sustentável.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.search_tools import web_search_tool, scrape_website_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -83,7 +85,7 @@ def create_seo_agent() -> Agent:
          de SEO, geração de meta tags, keywords e auditorias estruturadas.
     Tools: github_commit_tool — commita estratégias SEO e relatórios técnicos.
     """
-    llm = get_crewai_llm_str("seo")
+    llm = get_crewai_llm_for_agent("seo", AGENT_ID)
 
     agent = Agent(
         role="SEO Specialist",
@@ -105,9 +107,14 @@ def create_seo_agent() -> Agent:
             "plano de 90 dias priorizado por impacto. Sou obsessivo com dados: GSC, "
             "Screaming Frog, Ahrefs — os números nunca mentem quando você os interpreta certo."
         ),
-        tools=[github_commit_tool],
+        tools=[
+            github_commit_tool,
+            web_search_tool,
+            scrape_website_tool,
+            get_picoclaw_mcp_tool("seo", AGENT_ID),
+        ],
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
         memory=False,

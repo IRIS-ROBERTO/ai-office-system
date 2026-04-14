@@ -9,8 +9,11 @@ Traduz dashboards complexos em insights acionáveis que aumentam ROI.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.supabase_tool import supabase_query_tool
+from backend.tools.search_tools import web_search_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -83,7 +86,7 @@ def create_analytics_agent() -> Agent:
          interpretar dados complexos e formular análises estatisticamente sólidas.
     Tools: github_commit_tool — commita relatórios e dashboards no repositório.
     """
-    llm = get_crewai_llm_str("analytics")
+    llm = get_crewai_llm_for_agent("analytics", AGENT_ID)
 
     agent = Agent(
         role="Marketing Analytics Expert",
@@ -106,9 +109,14 @@ def create_analytics_agent() -> Agent:
             "Sou especialmente obcecado com funis de conversão — cada drop-off tem uma causa, "
             "e eu não paro até encontrá-la e propor uma correção testável."
         ),
-        tools=[github_commit_tool],
+        tools=[
+            github_commit_tool,
+            supabase_query_tool,
+            web_search_tool,
+            get_picoclaw_mcp_tool("analytics", AGENT_ID),
+        ],
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
         memory=False,

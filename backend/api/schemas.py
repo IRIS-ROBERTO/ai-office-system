@@ -29,11 +29,48 @@ class AgentStatus(BaseModel):
     position: dict[str, int]
 
 
+class AgentCapabilities(BaseModel):
+    agent_id: str
+    role: str
+    team: str
+    tool_policy: dict
+    picoclaw: dict
+
+
+class AgentPersonalityConfig(BaseModel):
+    agent_id: str
+    role: str
+    team: str
+    persona_name: str
+    mission: str
+    personality: list[str]
+    operating_rules: list[str]
+    autonomy_level: str
+    model_policy: str
+    visibility_level: str
+    updated_at: Optional[str] = None
+
+
+class AgentPersonalityUpdate(BaseModel):
+    persona_name: Optional[str] = None
+    mission: Optional[str] = None
+    personality: Optional[list[str]] = None
+    operating_rules: Optional[list[str]] = None
+    autonomy_level: Optional[str] = None
+    model_policy: Optional[str] = None
+    visibility_level: Optional[str] = None
+
+
 class SystemHealth(BaseModel):
     api: str
     redis: str
+    event_bus: str
+    event_bus_persistent: bool
     ollama: str
     available_models: list[str]
+    brain_router: dict
+    model_gate: dict
+    picoclaw: dict
     active_tasks: int
 
 

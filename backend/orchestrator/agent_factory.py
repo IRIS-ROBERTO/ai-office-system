@@ -17,9 +17,10 @@ from typing import Optional
 from crewai import Agent, Process
 
 from backend.config.settings import settings
+from backend.core.agent_personality import build_role_overlay
 from backend.core.event_types import AgentRole, TeamType
 from backend.core.resource_monitor import ResourceMonitor, get_capacity_report
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 
 logger = logging.getLogger(__name__)
 
@@ -466,20 +467,22 @@ class AgentFactory:
                 llm = f"ollama/{recommended}"
                 model_used = recommended
             else:
-                # Usar roteamento padrão via get_crewai_llm_str (retorna string LiteLLM)
-                llm = get_crewai_llm_str(role)
+                # Usar Brain Router para priorizar OpenRouter gratuito com fallback local.
+                llm = get_crewai_llm_for_agent(role, f"{role}_factory_pending")
                 model_used = default_model
+
+        personality_overlay = build_role_overlay(role)
 
         agent = Agent(
             role=profile["role_label"],
-            goal=profile["goal"],
-            backstory=profile["backstory"],
+            goal=f"{profile['goal']}{personality_overlay}",
+            backstory=f"{profile['backstory']}{personality_overlay}",
             llm=llm,
             tools=[],          # Tools injetadas pelo orquestrador se necessário
-            verbose=True,
+            verbose=False,
             allow_delegation=False,
             max_iter=settings.MAX_RETRIES_PER_SUBTASK * 3,
-            memory=True,
+            memory=False,
         )
 
         # Metadados dinâmicos — bypass Pydantic v2 strict setattr

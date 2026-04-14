@@ -9,8 +9,15 @@ O último filtro antes de qualquer código ir para produção.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from crewai_tools import FileReadTool
+
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
+from backend.tools.github_tool import github_commit_tool
+from backend.tools.search_tools import web_search_tool
+from backend.tools.workspace_tool import workspace_file_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
+
+_file_read_tool = FileReadTool()
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
@@ -80,10 +87,10 @@ def create_security_agent() -> Agent:
 
     LLM: qwen3-vl:8b via Ollama — raciocínio profundo necessário para análise
          de fluxos de ataque complexos, threat modeling e STRIDE.
-    Tools: [] — auditoria é análise pura; sem tools externas para evitar
-           vazamento de código sensível para APIs de terceiros.
+    Tools: workspace_file_tool + github_commit_tool — lê, corrige e commita
+           apenas no repositório local com paths controlados.
     """
-    llm = get_crewai_llm_str("security")
+    llm = get_crewai_llm_for_agent("security", AGENT_ID)
 
     agent = Agent(
         role="Security Engineer",
@@ -109,8 +116,8 @@ def create_security_agent() -> Agent:
             "de código que aprovo é uma linha que eu assinaria com meu nome."
         ),
         llm=llm,
-        tools=[],  # Auditoria pura — sem tools externas intencionalmente
-        verbose=True,
+        tools=[workspace_file_tool, github_commit_tool, _file_read_tool, web_search_tool],
+        verbose=False,
         allow_delegation=False,
         max_iter=10,
         memory=False,

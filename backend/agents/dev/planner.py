@@ -9,8 +9,15 @@ O único que fala antes de todo mundo. Define o mapa que o time inteiro vai segu
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.search_tools import web_search_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
+from backend.tools.workspace_tool import workspace_file_tool
+from crewai_tools import FileReadTool, DirectoryReadTool
+
+_file_read_tool = FileReadTool()
+_dir_read_tool  = DirectoryReadTool()
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -75,7 +82,7 @@ def create_planner_agent() -> Agent:
          ideal para quebrar requisitos em planos técnicos coesos.
     Tools: github_commit_tool — commita planos e task breakdowns no repo.
     """
-    llm = get_crewai_llm_str("planner")
+    llm = get_crewai_llm_for_agent("planner", AGENT_ID)
 
     agent = Agent(
         role="Software Architect & Task Planner",
@@ -99,8 +106,15 @@ def create_planner_agent() -> Agent:
             "mais rápido, nunca para criar processos que atrasam."
         ),
         llm=llm,
-        tools=[github_commit_tool],
-        verbose=True,
+        tools=[
+            workspace_file_tool,  # le/altera/diff/valida arquivos reais do workspace
+            github_commit_tool,   # commita ADRs, planos e task breakdowns
+            web_search_tool,      # pesquisa padrões arquiteturais e tecnologias
+            _file_read_tool,      # lê código existente antes de planejar
+            _dir_read_tool,       # inspeciona estrutura do projeto
+            get_picoclaw_mcp_tool("planner", AGENT_ID),  # MCPs liberados pela governanca
+        ],
+        verbose=False,
         allow_delegation=False,
         max_iter=10,
         memory=False,

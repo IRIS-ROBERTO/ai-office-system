@@ -9,9 +9,16 @@ cirúrgica de qualidade. Nada passa pelo seu olhar sem evidência de qualidade.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from crewai_tools import FileReadTool, DirectoryReadTool
+
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.code_executor_tool import code_executor_tool
+from backend.tools.workspace_tool import workspace_file_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
+
+_file_read_tool = FileReadTool()
+_dir_read_tool  = DirectoryReadTool()
 from backend.core.event_bus import event_bus
 
 logger = logging.getLogger(__name__)
@@ -83,7 +90,7 @@ def create_qa_agent() -> Agent:
          edge cases não óbvios, race conditions e gerar cenários de teste abrangentes.
     Tools: github_commit_tool — commita suites de teste e relatórios de bugs.
     """
-    llm = get_crewai_llm_str("qa")
+    llm = get_crewai_llm_for_agent("qa", AGENT_ID)
 
     agent = Agent(
         role="QA Engineer",
@@ -107,8 +114,8 @@ def create_qa_agent() -> Agent:
             "não conseguir dormir tranquilo após revisar o código, ele não vai para produção."
         ),
         llm=llm,
-        tools=[github_commit_tool],
-        verbose=True,
+        tools=[workspace_file_tool, github_commit_tool, _file_read_tool, _dir_read_tool, code_executor_tool],
+        verbose=False,
         allow_delegation=False,
         max_iter=12,
         memory=False,

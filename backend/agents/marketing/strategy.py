@@ -9,8 +9,12 @@ Define o norte magnético que todos os outros agentes de marketing seguem.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.search_tools import web_search_tool
+from backend.tools.notion_tool import notion_write_tool
+from backend.tools.supabase_tool import supabase_query_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -83,7 +87,7 @@ def create_strategy_agent() -> Agent:
          estratégico multi-variável com frameworks complexos.
     Tools: github_commit_tool — documenta estratégias e roadmaps no repositório.
     """
-    llm = get_crewai_llm_str("strategy")
+    llm = get_crewai_llm_for_agent("strategy", AGENT_ID)
 
     agent = Agent(
         role="Marketing Strategist",
@@ -104,9 +108,15 @@ def create_strategy_agent() -> Agent:
             "medida, não é estratégia — é esperança. E eu não trabalho com esperança, "
             "trabalho com evidências."
         ),
-        tools=[github_commit_tool],
+        tools=[
+            github_commit_tool,
+            web_search_tool,
+            notion_write_tool,
+            supabase_query_tool,
+            get_picoclaw_mcp_tool("strategy", AGENT_ID),
+        ],
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
         memory=False,

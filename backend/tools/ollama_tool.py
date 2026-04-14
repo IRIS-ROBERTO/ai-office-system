@@ -27,6 +27,7 @@ from langchain_core.language_models import BaseChatModel
 
 from backend.config.settings import settings
 from backend.tools.model_gate import gate, ModelNotAllowedError, BudgetExceededError
+from backend.tools.brain_router import get_crewai_llm_for_role, get_langchain_llm_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,16 @@ def get_senior_llm(temperature: float = 0.2) -> BaseChatModel:
       2. OpenRouter free pool (4 modelos gratuitos, rotação por provedor)
       3. Gemini 2.0 Flash (fallback cloud final)
     """
-    import asyncio, httpx as _httpx
+    try:
+        return get_langchain_llm_for_role(
+            role="orchestrator",
+            agent_id="orchestrator_senior_01",
+            temperature=temperature,
+        )
+    except Exception as exc:
+        logger.warning("BrainRouter indisponivel para Senior; usando fallback legado: %s", exc)
+
+    import httpx as _httpx
 
     # 1. Ollama local — prioridade: velocidade de resposta > tamanho de parâmetros
     # Para planejamento (planning), modelos menores respondem mais rápido
@@ -181,9 +191,9 @@ def get_crewai_llm_str(role: str = "general") -> str:
     base = settings.OLLAMA_BASE_URL  # http://127.0.0.1:11434
     routing = {
         # Dev Team
-        "planner":   f"ollama/qwen3-vl:8b",
-        "frontend":  f"ollama/qwen2.5:7b",
-        "backend":   f"ollama/qwen2.5:7b",
+        "planner":   f"ollama/{settings.LOCAL_MODEL_FALLBACK}",
+        "frontend":  f"ollama/{settings.LOCAL_MODEL_FALLBACK}",
+        "backend":   f"ollama/{settings.LOCAL_MODEL_FALLBACK}",
         "qa":        f"ollama/qwen3-vl:8b",
         "security":  f"ollama/qwen3-vl:8b",
         "docs":      f"ollama/{settings.LOCAL_MODEL_DOCS}",   # iris-comments
@@ -198,6 +208,20 @@ def get_crewai_llm_str(role: str = "general") -> str:
         "analytics": f"ollama/qwen3-vl:8b",
     }
     return routing.get(role, f"ollama/{settings.LOCAL_MODEL_FALLBACK}")
+
+
+def get_crewai_llm_for_agent(role: str = "general", agent_id: str = "unknown"):
+    """Retorna LLM CrewAI via BrainRouter com fallback local legado."""
+    try:
+        return get_crewai_llm_for_role(role=role, agent_id=agent_id)
+    except Exception as exc:
+        logger.warning(
+            "BrainRouter indisponivel para %s/%s; usando Ollama local: %s",
+            role,
+            agent_id,
+            exc,
+        )
+        return get_crewai_llm_str(role)
 
 
 def get_vision_llm(temperature: float = 0.1) -> ChatOllama:

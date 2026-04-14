@@ -9,8 +9,11 @@ Transforma volumes massivos de dados brutos em relatórios acionáveis.
 import logging
 from crewai import Agent
 
-from backend.tools.ollama_tool import get_crewai_llm_str
+from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
+from backend.tools.search_tools import web_search_tool, scrape_website_tool
+from backend.tools.supabase_tool import supabase_query_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 from backend.core.event_bus import event_bus
 
@@ -83,7 +86,7 @@ def create_research_agent() -> Agent:
          e geração de relatórios estruturados com raciocínio profundo.
     Tools: github_commit_tool — commita relatórios de mercado no repositório.
     """
-    llm = get_crewai_llm_str("research")
+    llm = get_crewai_llm_for_agent("research", AGENT_ID)
 
     agent = Agent(
         role="Market Research Analyst",
@@ -104,9 +107,15 @@ def create_research_agent() -> Agent:
             "projeto os próximos 18 meses. Cada recomendação minha vem com um nível de "
             "confiança explícito, porque honestidade sobre incerteza é parte do meu trabalho."
         ),
-        tools=[github_commit_tool],
+        tools=[
+            github_commit_tool,
+            web_search_tool,
+            scrape_website_tool,
+            supabase_query_tool,
+            get_picoclaw_mcp_tool("research", AGENT_ID),
+        ],
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
         memory=False,

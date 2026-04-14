@@ -106,6 +106,38 @@ FREE_MODELS: list[ApprovedModel] = [
         context_length=200_000,
         best_for="Roteamento automático entre modelos gratuitos",
     ),
+    ApprovedModel(
+        model_id="openai/gpt-oss-120b:free",
+        display_name="OpenAI GPT-OSS 120B (Free)",
+        prompt_cost_per_token=0.0,
+        completion_cost_per_token=0.0,
+        context_length=131_072,
+        best_for="Code review, arquitetura e raciocínio geral gratuito",
+    ),
+    ApprovedModel(
+        model_id="openai/gpt-oss-20b:free",
+        display_name="OpenAI GPT-OSS 20B (Free)",
+        prompt_cost_per_token=0.0,
+        completion_cost_per_token=0.0,
+        context_length=131_072,
+        best_for="Fallback gratuito rápido para agentes de execução",
+    ),
+    ApprovedModel(
+        model_id="minimax/minimax-m2.5:free",
+        display_name="MiniMax M2.5 (Free)",
+        prompt_cost_per_token=0.0,
+        completion_cost_per_token=0.0,
+        context_length=196_608,
+        best_for="Ferramentas, execução estruturada e tarefas operacionais",
+    ),
+    ApprovedModel(
+        model_id="arcee-ai/trinity-large-preview:free",
+        display_name="Trinity Large Preview (Free)",
+        prompt_cost_per_token=0.0,
+        completion_cost_per_token=0.0,
+        context_length=131_000,
+        best_for="Planejamento, análise crítica e revisão",
+    ),
 ]
 
 # Modelos pagos com custo muito baixo (aprovados com limite por chamada)
@@ -201,6 +233,20 @@ class ModelGate:
 
         # 1. Verifica whitelist
         approved = APPROVED_MODELS.get(model_id)
+        if not approved and ModelGate._looks_like_openrouter_free(model_id):
+            approved = ApprovedModel(
+                model_id=model_id,
+                display_name=f"{model_id} (dynamic free)",
+                prompt_cost_per_token=0.0,
+                completion_cost_per_token=0.0,
+                context_length=128_000,
+                best_for="Modelo gratuito descoberto dinamicamente no catalogo OpenRouter",
+            )
+            logger.info(
+                "[ModelGate] modelo free dinamico permitido — %s para agente %s",
+                model_id,
+                agent_id,
+            )
         if not approved:
             logger.error(
                 "[ModelGate] BLOQUEADO — modelo '%s' nao esta na whitelist. "
@@ -252,6 +298,11 @@ class ModelGate:
             )
 
         return approved
+
+    @staticmethod
+    def _looks_like_openrouter_free(model_id: str) -> bool:
+        """Permite apenas rotas explicitamente gratuitas descobertas pelo catalogo."""
+        return model_id == "openrouter/free" or model_id.endswith(":free")
 
     @staticmethod
     def get_usage_summary() -> dict:

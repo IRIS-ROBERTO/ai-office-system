@@ -16,6 +16,8 @@ class TaskState(TypedDict):
     subtasks: list[dict]               # Lista quebrada pelo Planner
     current_subtask_index: int
     agent_outputs: dict[str, str]      # agent_id → resultado
+    delivery_evidence: dict[str, dict] # subtask_id → evidências de entrega
+    delivery_manifests: dict[str, dict] # subtask_id → manifesto deterministico
     quality_approved: bool
     retry_count: int
     final_output: Optional[str]
