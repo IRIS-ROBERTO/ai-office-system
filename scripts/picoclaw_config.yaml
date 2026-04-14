@@ -1,0 +1,115 @@
+# ============================================================================
+# PicoClaw MCP Bridge Configuration — IRIS AI Office System
+# Sipeed PicoClaw v0.3.0 — Go ultra-lightweight AI, native MCP protocol
+#
+# This config tells PicoClaw which MCP servers to expose on the unified
+# HTTP gateway at localhost:8765. Agents use PicoClawMCPTool to call
+# any of these servers via:
+#   POST /mcp/call
+#   { "server": "<server_name>", "tool": "<tool_name>", "arguments": {...} }
+# ============================================================================
+
+server:
+  host: "127.0.0.1"
+  port: 8765
+  log_level: "info"       # debug | info | warn | error
+  timeout_seconds: 30
+  max_concurrent_calls: 10
+
+# ── MCP Servers ──────────────────────────────────────────────────────────────
+# Each server block maps a logical name to an MCP-compatible backend.
+# Uncomment and fill in API keys as needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+mcp_servers:
+
+  # Brave Search — web search with API key
+  # Used by: ATLAS, PIXEL, FORGE, SHERLOCK, AEGIS, LORE, ORACLE, MAVEN, NOVA, APEX, PRISM
+  - name: "brave-search"
+    enabled: false                        # Set true after adding API key
+    type: "http"
+    endpoint: "https://api.search.brave.com/mcp"
+    auth:
+      type: "bearer"
+      token: "YOUR_BRAVE_API_KEY_HERE"    # Replace with real key
+
+  # Filesystem — local file operations (restricted to project dir)
+  # Used by: SHERLOCK (read test files), LORE (read source to document)
+  - name: "filesystem"
+    enabled: true
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "."                               # Restrict to project root
+
+  # GitHub — repository operations via MCP
+  # Used by: ATLAS, PIXEL, FORGE (commit via MCP instead of direct API)
+  - name: "github"
+    enabled: false                        # Set true after adding token
+    type: "http"
+    endpoint: "https://api.github.com/mcp"
+    auth:
+      type: "bearer"
+      token: "YOUR_GITHUB_TOKEN_HERE"
+
+  # Notion — full Notion workspace access
+  # Used by: LORE (docs), NOVA (content), MAVEN (strategy), PULSE (social)
+  - name: "notion"
+    enabled: false                        # Set true after adding integration token
+    type: "http"
+    endpoint: "https://api.notion.com/mcp"
+    auth:
+      type: "bearer"
+      token: "YOUR_NOTION_TOKEN_HERE"     # secret_xxxxx from Notion integration
+
+  # Supabase — database access for analytics agents
+  # Used by: ORACLE (research), PRISM (analytics), MAVEN (strategy)
+  - name: "supabase"
+    enabled: false
+    type: "http"
+    endpoint: "YOUR_SUPABASE_URL/mcp"
+    auth:
+      type: "bearer"
+      token: "YOUR_SUPABASE_SERVICE_KEY"
+
+  # Memory (local) — persistent knowledge base for all agents
+  # Stores agent learnings across sessions using local embedding model
+  - name: "memory"
+    enabled: true
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-memory"
+    env:
+      MEMORY_FILE_PATH: "./data/picoclaw_memory.json"
+
+  # Sequential Thinking — structured problem decomposition
+  # Used by: ATLAS (planning), ORACLE (research synthesis)
+  - name: "sequential-thinking"
+    enabled: true
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-sequential-thinking"
+
+# ── Ollama integration (for PicoClaw's own inference) ────────────────────────
+ollama:
+  base_url: "http://localhost:11434"
+  default_model: "qwen2.5:7b"
+  embed_model: "nomic-embed-text"
+  timeout_seconds: 120
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+rate_limits:
+  per_server:
+    brave-search: 10        # calls/minute
+    github: 30
+    notion: 20
+    supabase: 50
+    filesystem: 100
+    memory: 200
+    sequential-thinking: 50
