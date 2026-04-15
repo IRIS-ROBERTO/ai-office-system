@@ -27,7 +27,7 @@ from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 _ROOT = Path(__file__).resolve().parents[2]
 _MANIFEST_ROOT = _ROOT / ".runtime" / "delivery-manifests"
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)
-_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\r\n\"'<>|]+")
+_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s\r\n\"'<>|,;)]+")
 
 
 @dataclass

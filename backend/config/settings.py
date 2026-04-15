@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     NOTION_TOKEN: str = ""
     NOTION_DEFAULT_PARENT_ID: str = ""
 
-    PICOCLAW_HOST: str = "http://localhost:8765"
+    PICOCLAW_HOST: str = "http://localhost:18790"
     PICOCLAW_ENABLED: bool = True
     PICOCLAW_REQUIRED: bool = False
 

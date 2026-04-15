@@ -1,0 +1,78 @@
+{
+  "version": 2,
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picoclaw/workspace",
+      "restrict_to_workspace": true,
+      "allow_read_outside_workspace": false,
+      "model_name": "local-ollama",
+      "max_tokens": 4096,
+      "max_tool_iterations": 20
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "local-ollama",
+      "model": "ollama/qwen2.5:7b",
+      "api_base": "http://127.0.0.1:11434/v1",
+      "api_keys": ["ollama-local"],
+      "enabled": true
+    }
+  ],
+  "channels": {},
+  "tools": {
+    "web": {
+      "duckduckgo": {
+        "enabled": true,
+        "max_results": 5
+      },
+      "brave": {
+        "enabled": false,
+        "api_keys": ["YOUR_BRAVE_API_KEY"],
+        "max_results": 5
+      }
+    },
+    "mcp": {
+      "enabled": true,
+      "servers": {
+        "filesystem": {
+          "enabled": true,
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "~/.picoclaw/workspace"]
+        },
+        "memory": {
+          "enabled": true,
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-memory"]
+        },
+        "sequential-thinking": {
+          "enabled": true,
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+        },
+        "github": {
+          "enabled": false,
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "SET_IN_LOCAL_SECURITY_FILE"
+          }
+        }
+      }
+    },
+    "exec": {
+      "enable_deny_patterns": true,
+      "custom_deny_patterns": [
+        "(?i)\\.env",
+        "(?i)github_pat_",
+        "(?i)sk-[a-z0-9_-]+"
+      ],
+      "custom_allow_patterns": []
+    }
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18790,
+    "log_level": "info"
+  }
+}

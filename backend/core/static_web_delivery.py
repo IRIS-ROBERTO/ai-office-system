@@ -15,7 +15,7 @@ from typing import Any
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 
 
-_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\r\n\"'<>|]+")
+_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s\r\n\"'<>|,;)]+")
 
 
 def can_handle_static_web_delivery(subtask: dict[str, Any]) -> bool:
@@ -102,7 +102,10 @@ def _extract_project_root(subtask: dict[str, Any]) -> Path:
     )
     for match in _WINDOWS_PATH_RE.finditer(source):
         raw = match.group(0).strip().rstrip(".,;)")
-        candidate = Path(raw).expanduser().resolve()
+        try:
+            candidate = Path(raw).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
         if candidate.is_file():
             candidate = candidate.parent
         try:

@@ -9,7 +9,7 @@ access to Gmail, Google Calendar, Notion, n8n, Supabase, GitHub, and any
 other MCP you have configured, through a single consistent tool.
 
 Architecture:
-  IRIS Agent → PicoClawMCPTool → PicoClaw HTTP API (localhost:8765)
+  IRIS Agent → PicoClawMCPTool → PicoClaw HTTP API (localhost:18790)
                                        ↓ MCP protocol
                                   ┌────────────────────┐
                                   │ Gmail MCP          │
@@ -21,10 +21,10 @@ Architecture:
                                   └────────────────────┘
 
 Setup: run scripts/install_picoclaw.ps1 to install PicoClaw locally.
-Config: see scripts/picoclaw_config.yaml for MCP server connections.
+Config: see scripts/picoclaw_config.json for MCP server connections.
 
 Requirements:
-  PICOCLAW_HOST=http://localhost:8765  (default)
+  PICOCLAW_HOST=http://localhost:18790 (default)
   PICOCLAW_ENABLED=true
   PICOCLAW_REQUIRED=false              (optional release dependency by default)
 """
@@ -89,7 +89,7 @@ class PicoClawMCPTool(BaseTool):
         arguments: dict,
     ) -> str:
         enabled = getattr(settings, "PICOCLAW_ENABLED", True)
-        host = getattr(settings, "PICOCLAW_HOST", "http://localhost:8765")
+        host = getattr(settings, "PICOCLAW_HOST", "http://localhost:18790")
 
         if not enabled:
             return "PICOCLAW_DISABLED: PICOCLAW_ENABLED=false."
@@ -135,7 +135,7 @@ class PicoClawMCPTool(BaseTool):
             if resp.status_code == 404:
                 return (
                     f"PICOCLAW_NOT_FOUND: tool '{tool_name}' no servidor '{server}'. "
-                    f"Verifique se o MCP server está configurado em picoclaw_config.yaml."
+                    f"Verifique se o MCP server está configurado em picoclaw_config.json."
                 )
 
             resp.raise_for_status()
@@ -167,10 +167,10 @@ class PicoClawMCPTool(BaseTool):
 
 async def check_picoclaw_health() -> dict[str, Any]:
     enabled = getattr(settings, "PICOCLAW_ENABLED", True)
-    host = getattr(settings, "PICOCLAW_HOST", "http://localhost:8765")
+    host = getattr(settings, "PICOCLAW_HOST", "http://localhost:18790")
     required = getattr(settings, "PICOCLAW_REQUIRED", False)
     binary_path = Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "picoclaw.exe"
-    config_path = Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "config.yaml"
+    config_path = Path.home() / ".picoclaw" / "config.json"
     if not enabled:
         return {
             "status": "disabled",
@@ -233,10 +233,10 @@ async def check_picoclaw_health() -> dict[str, Any]:
 def get_picoclaw_status() -> dict[str, Any]:
     return {
         "enabled": getattr(settings, "PICOCLAW_ENABLED", True),
-        "host": getattr(settings, "PICOCLAW_HOST", "http://localhost:8765"),
+        "host": getattr(settings, "PICOCLAW_HOST", "http://localhost:18790"),
         "required": getattr(settings, "PICOCLAW_REQUIRED", False),
         "binary_path": str(Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "picoclaw.exe"),
-        "config_path": str(Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "config.yaml"),
+        "config_path": str(Path.home() / ".picoclaw" / "config.json"),
         "gateway": "PicoClaw MCP HTTP bridge",
         "control_model": "role_policy_plus_orchestrator_high_risk",
     }

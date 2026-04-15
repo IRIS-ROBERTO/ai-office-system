@@ -1,38 +1,45 @@
 # ============================================================================
-# IRIS AI Office System - PicoClaw MCP Bridge Installer
-# Sipeed PicoClaw: Go-based ultra-lightweight AI with native MCP protocol
-# Memory footprint: <10MB RAM | Startup: <200ms | Port: 8765
+# IRIS AI Office System - PicoClaw Gateway Installer
+#
+# PicoClaw current releases use:
+#   - command: picoclaw gateway
+#   - config:  ~/.picoclaw/config.json
+#   - gateway: http://127.0.0.1:18790
 #
 # Usage:
 #   .\scripts\install_picoclaw.ps1
-#   .\scripts\install_picoclaw.ps1 -ConfigOnly    # Skip download, just write config
-#
-# PicoClaw acts as a unified HTTP gateway for all your MCP servers.
-# Agents call POST http://localhost:8765/mcp/call with:
-#   { "server": "brave-search", "tool": "search", "arguments": {...} }
+#   .\scripts\install_picoclaw.ps1 -ConfigOnly
+#   .\scripts\install_picoclaw.ps1 -OverwriteConfig
 # ============================================================================
 
 param(
     [switch]$ConfigOnly = $false,
-    [string]$InstallDir = "$env:LOCALAPPDATA\PicoClaw"
+    [switch]$OverwriteConfig = $false,
+    [string]$InstallDir = "$env:LOCALAPPDATA\PicoClaw",
+    [string]$PicoClawHome = "$env:USERPROFILE\.picoclaw",
+    [int]$GatewayPort = 18790
 )
 
 $ErrorActionPreference = "Stop"
 
-$PICOCLAW_CONFIG  = "$PSScriptRoot\picoclaw_config.yaml"
-$PICOCLAW_EXE     = "$InstallDir\picoclaw.exe"
+$BundledConfig = Join-Path $PSScriptRoot "picoclaw_config.json"
+$PicoClawExe = Join-Path $InstallDir "picoclaw.exe"
+$TargetConfig = Join-Path $PicoClawHome "config.json"
+$GatewayUrl = "http://127.0.0.1:$GatewayPort"
+$OutLog = Join-Path $InstallDir "picoclaw-gateway.out.log"
+$ErrLog = Join-Path $InstallDir "picoclaw-gateway.err.log"
 
 Write-Host ""
-Write-Host "=== IRIS PicoClaw MCP Bridge Installer ===" -ForegroundColor Cyan
+Write-Host "=== IRIS PicoClaw Gateway Installer ===" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Create install directory
-if (-not (Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir | Out-Null
-    Write-Host "[+] Created install directory: $InstallDir" -ForegroundColor Green
+foreach ($dir in @($InstallDir, $PicoClawHome, (Join-Path $PicoClawHome "workspace"))) {
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        Write-Host "[+] Created directory: $dir" -ForegroundColor Green
+    }
 }
 
-# 2. Download binary
 if (-not $ConfigOnly) {
     Write-Host "[~] Discovering latest PicoClaw release..." -ForegroundColor Yellow
 
@@ -51,8 +58,8 @@ if (-not $ConfigOnly) {
         if (-not $tmpDirFull.StartsWith($tmpRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Unsafe temporary extract path: $tmpDirFull"
         }
-        if (Test-Path $tmpZip) { Remove-Item -LiteralPath $tmpZip -Force }
-        if (Test-Path $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force }
+        if (Test-Path -LiteralPath $tmpZip) { Remove-Item -LiteralPath $tmpZip -Force }
+        if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force }
 
         Write-Host "[~] Downloading PicoClaw $($release.tag_name)..." -ForegroundColor Yellow
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing
@@ -66,36 +73,48 @@ if (-not $ConfigOnly) {
             throw "No PicoClaw executable found inside $tmpZip."
         }
 
-        Copy-Item -Path $downloadedExe.FullName -Destination $PICOCLAW_EXE -Force
-        Write-Host "[+] Downloaded to: $PICOCLAW_EXE" -ForegroundColor Green
+        Copy-Item -Path $downloadedExe.FullName -Destination $PicoClawExe -Force
+        Write-Host "[+] Downloaded to: $PicoClawExe" -ForegroundColor Green
     } catch {
         Write-Host "[!] Download failed: $_" -ForegroundColor Red
         Write-Host "    Download manually from: https://github.com/sipeed/picoclaw/releases/latest" -ForegroundColor Yellow
-        Write-Host "    Place the binary at: $PICOCLAW_EXE" -ForegroundColor Yellow
-        Write-Host "    Then re-run with -ConfigOnly flag." -ForegroundColor Yellow
+        Write-Host "    Place the binary at: $PicoClawExe" -ForegroundColor Yellow
+        Write-Host "    Then re-run with -ConfigOnly." -ForegroundColor Yellow
     }
 } else {
     Write-Host "[~] Skipping download (ConfigOnly mode)" -ForegroundColor Yellow
 }
 
-# 3. Copy config
-$targetConfig = "$InstallDir\config.yaml"
-if (Test-Path $PICOCLAW_CONFIG) {
-    Copy-Item -Path $PICOCLAW_CONFIG -Destination $targetConfig -Force
-    Write-Host "[+] Config copied to: $targetConfig" -ForegroundColor Green
-} else {
-    Write-Host "[!] Config not found at $PICOCLAW_CONFIG" -ForegroundColor Red
-    Write-Host "    Run this script from the project root." -ForegroundColor Yellow
+if (-not (Test-Path -LiteralPath $BundledConfig)) {
+    throw "Bundled config not found: $BundledConfig"
 }
 
-# 4. Create Windows scheduled task (auto-start at login)
+if (Test-Path -LiteralPath $TargetConfig) {
+    if ($OverwriteConfig) {
+        $backup = "$TargetConfig.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
+        Copy-Item -Path $TargetConfig -Destination $backup -Force
+        Copy-Item -Path $BundledConfig -Destination $TargetConfig -Force
+        Write-Host "[+] Existing config backed up to: $backup" -ForegroundColor Green
+        Write-Host "[+] Config overwritten at: $TargetConfig" -ForegroundColor Green
+    } else {
+        Write-Host "[~] Existing config preserved: $TargetConfig" -ForegroundColor Yellow
+        Write-Host "    Use -OverwriteConfig to replace it with the IRIS template." -ForegroundColor Yellow
+    }
+} else {
+    Copy-Item -Path $BundledConfig -Destination $TargetConfig -Force
+    Write-Host "[+] Config copied to: $TargetConfig" -ForegroundColor Green
+}
+
 $taskName = "IRIS-PicoClaw"
 $taskExists = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$taskArgs = "gateway"
 
 if ($taskExists) {
-    Write-Host "[~] Scheduled task '$taskName' already exists - skipping." -ForegroundColor Yellow
-} elseif (Test-Path $PICOCLAW_EXE) {
-    $action  = New-ScheduledTaskAction -Execute $PICOCLAW_EXE -Argument "--config `"$targetConfig`""
+    Write-Host "[~] Scheduled task '$taskName' already exists - updating action." -ForegroundColor Yellow
+    $action = New-ScheduledTaskAction -Execute $PicoClawExe -Argument $taskArgs -WorkingDirectory $PicoClawHome
+    Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null
+} elseif (Test-Path -LiteralPath $PicoClawExe) {
+    $action = New-ScheduledTaskAction -Execute $PicoClawExe -Argument $taskArgs -WorkingDirectory $PicoClawHome
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 0) -RestartCount 3
 
@@ -109,27 +128,38 @@ if ($taskExists) {
     }
 }
 
-# 5. Start PicoClaw immediately
-if (Test-Path $PICOCLAW_EXE) {
-    Write-Host "[~] Starting PicoClaw..." -ForegroundColor Yellow
-    Start-Process -FilePath $PICOCLAW_EXE -ArgumentList "--config `"$targetConfig`"" -WindowStyle Hidden
-    Start-Sleep -Seconds 2
+if (Test-Path -LiteralPath $PicoClawExe) {
+    Get-Process | Where-Object { $_.ProcessName -like "*picoclaw*" } | ForEach-Object {
+        Stop-Process -Id $_.Id -Force
+    }
+
+    Write-Host "[~] Starting PicoClaw gateway..." -ForegroundColor Yellow
+    $env:PICOCLAW_HOME = $PicoClawHome
+    $env:PICOCLAW_GATEWAY_PORT = "$GatewayPort"
+    Start-Process -FilePath $PicoClawExe -ArgumentList @("gateway") `
+        -WorkingDirectory $PicoClawHome `
+        -RedirectStandardOutput $OutLog `
+        -RedirectStandardError $ErrLog `
+        -WindowStyle Hidden
+    Start-Sleep -Seconds 5
 
     try {
-        $health = Invoke-RestMethod -Uri "http://localhost:8765/health" -TimeoutSec 5
-        Write-Host "[+] PicoClaw running! Status: $($health.status)" -ForegroundColor Green
+        $health = Invoke-RestMethod -Uri "$GatewayUrl/health" -TimeoutSec 8
+        Write-Host "[+] PicoClaw gateway running. Status: $($health.status)" -ForegroundColor Green
     } catch {
-        Write-Host "[~] PicoClaw may still be starting - check http://localhost:8765/health" -ForegroundColor Yellow
+        Write-Host "[~] PicoClaw gateway did not answer $GatewayUrl/health yet." -ForegroundColor Yellow
+        Write-Host "    stdout: $OutLog" -ForegroundColor Yellow
+        Write-Host "    stderr: $ErrLog" -ForegroundColor Yellow
     }
 }
 
 Write-Host ""
 Write-Host "=== Installation complete ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Gateway : http://localhost:8765" -ForegroundColor White
-Write-Host "  Health  : http://localhost:8765/health" -ForegroundColor White
-Write-Host "  MCP call: POST http://localhost:8765/mcp/call" -ForegroundColor White
+Write-Host "  Home    : $PicoClawHome" -ForegroundColor White
+Write-Host "  Config  : $TargetConfig" -ForegroundColor White
+Write-Host "  Gateway : $GatewayUrl" -ForegroundColor White
+Write-Host "  Health  : $GatewayUrl/health" -ForegroundColor White
 Write-Host ""
-Write-Host "  Add your API keys to: $targetConfig" -ForegroundColor Yellow
-Write-Host "  Then restart PicoClaw for changes to take effect." -ForegroundColor Yellow
+Write-Host "  Store real credentials in .security.yml or your local config, not in git." -ForegroundColor Yellow
 Write-Host ""
