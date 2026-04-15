@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "approval-pulse",
+  "version": "1.0.0", 
+  "scripts": {
+    "build": "vite build",
+    "serve": "vite preview"
+  },
+  "dependencies": {}
+}
