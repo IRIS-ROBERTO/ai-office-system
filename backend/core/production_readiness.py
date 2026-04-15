@@ -14,6 +14,20 @@ from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[2]
 
+_LOCAL_ARTIFACT_PREFIXES = (
+    ".runtime/",
+    "agent-deliveries/",
+    "frontend/.claude/",
+    "frontend/dist/",
+    "logs/",
+)
+_LOCAL_ARTIFACT_FILES = (
+    ".env",
+    "frontend/.env.local",
+    "tmp-uvicorn-reload.err.log",
+    "tmp-uvicorn-reload.out.log",
+)
+
 
 def build_production_readiness_report(
     *,
@@ -89,10 +103,14 @@ def build_production_readiness_report(
         )
 
     if git_summary["dirty"]:
+        release_blocker_count = int(git_summary.get("release_blocker_count") or 0)
         blockers.append(
             {
                 "code": "dirty_worktree",
-                "message": "Repositorio possui alteracoes nao commitadas ou arquivos nao rastreados.",
+                "message": (
+                    "Repositorio possui "
+                    f"{release_blocker_count} alteracoes de release nao commitadas ou nao rastreadas."
+                ),
             }
         )
 
@@ -152,21 +170,55 @@ def _git_summary(repo_root: Path) -> dict[str, Any]:
         }
 
     lines = [line for line in result.stdout.splitlines() if line.strip()]
-    untracked = [line for line in lines if line.startswith("??")]
+    entries = [_parse_git_status_line(line) for line in lines]
+    untracked = [entry for entry in entries if entry["status"] == "??"]
+    local_artifacts = [
+        entry for entry in entries if _is_local_runtime_artifact(entry["status"], entry["path"])
+    ]
+    release_blockers = [
+        entry for entry in entries if entry not in local_artifacts
+    ]
+
     return {
         "available": True,
-        "dirty": bool(lines),
+        "dirty": bool(release_blockers),
         "changed_count": len(lines),
         "untracked_count": len(untracked),
-        "sample": [_sanitize_git_status_line(line) for line in lines[:25]],
+        "release_blocker_count": len(release_blockers),
+        "local_artifact_count": len(local_artifacts),
+        "sample": [_sanitize_git_status_line(entry["line"]) for entry in release_blockers[:25]],
+        "local_artifacts_sample": [
+            _sanitize_git_status_line(entry["line"]) for entry in local_artifacts[:25]
+        ],
     }
+
+
+def _parse_git_status_line(line: str) -> dict[str, str]:
+    status = line[:2]
+    raw_path = line[3:] if len(line) > 3 else ""
+    if " -> " in raw_path:
+        raw_path = raw_path.split(" -> ", 1)[1]
+    path = raw_path.strip().replace("\\", "/")
+    return {"line": line, "status": status, "path": path}
+
+
+def _is_local_runtime_artifact(status: str, path: str) -> bool:
+    if status != "??":
+        return False
+    if path in _LOCAL_ARTIFACT_FILES:
+        return True
+    if path.endswith("/.env") or path.endswith("/.env.local"):
+        return True
+    if path.endswith("__pycache__/") or "/__pycache__/" in path:
+        return True
+    return any(path.startswith(prefix) for prefix in _LOCAL_ARTIFACT_PREFIXES)
 
 
 def _sanitize_git_status_line(line: str) -> str:
     # Keep operational visibility without exposing file contents or secret values.
-    sensitive_names = (".env", ".env.local")
+    sensitive_names = (".env.local", ".env")
     for name in sensitive_names:
-        if line.strip().endswith(name):
+        if line.strip().endswith(name) or line.strip().endswith(f"/{name}"):
             return line.replace(name, f"{name} (secret file, content not shown)")
     return line
 
