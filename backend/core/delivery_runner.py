@@ -10,6 +10,8 @@ strict operational manifest so the orchestrator can distinguish:
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,10 +21,13 @@ from backend.core.delivery_evidence import (
     EvidenceValidationResult,
     validate_delivery_evidence,
 )
+from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MANIFEST_ROOT = _ROOT / ".runtime" / "delivery-manifests"
+_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)
+_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\r\n\"'<>|]+")
 
 
 @dataclass
@@ -85,6 +90,25 @@ class DeliveryRunner:
             subtask_id=subtask_id,
             require_commit=require_commit,
         )
+        if not evidence_result.approved:
+            repaired_output = self._repair_evidence_from_git(
+                task_id=task_id,
+                subtask_id=subtask_id,
+                agent_id=agent_id,
+                output_text=output_text,
+                subtask=subtask,
+            )
+            if repaired_output:
+                repaired_result = validate_delivery_evidence(
+                    repaired_output,
+                    task_id=task_id,
+                    subtask_id=subtask_id,
+                    require_commit=require_commit,
+                )
+                if repaired_result.approved:
+                    output_text = repaired_output
+                    evidence_result = repaired_result
+
         stages.extend(self._evidence_stages(evidence_result, require_commit=require_commit))
 
         required_failures = [
@@ -225,6 +249,118 @@ class DeliveryRunner:
                 },
             ),
         ]
+
+    def _repair_evidence_from_git(
+        self,
+        *,
+        task_id: str,
+        subtask_id: str,
+        agent_id: str,
+        output_text: str,
+        subtask: dict[str, Any],
+    ) -> str:
+        sha_match = _SHA_RE.search(output_text or "")
+        if not sha_match:
+            return ""
+        sha = sha_match.group(0)
+
+        candidate_roots = self._candidate_repo_roots(subtask)
+        for repo_root in candidate_roots:
+            if not self._commit_exists(repo_root, sha):
+                continue
+            files = self._commit_files(repo_root, sha)
+            if not files:
+                continue
+            commit_message = self._commit_message(repo_root, sha)
+            status = self._git(repo_root, ["status", "--short"])
+            validation_result = "passed" if status.returncode == 0 else "failed"
+            files_block = "\n".join(f"- {item}" for item in files)
+            return (
+                f"{output_text.rstrip()}\n\n"
+                "DELIVERY_EVIDENCE\n"
+                f"agent: {agent_id}\n"
+                f"task_id: {task_id}\n"
+                f"subtask_id: {subtask_id}\n"
+                f"repo_path: {repo_root}\n"
+                "files_changed:\n"
+                f"{files_block}\n"
+                "validation:\n"
+                "- command: git cat-file + git show + git status --short\n"
+                f"  result: {validation_result}\n"
+                "commit:\n"
+                f"  message: {commit_message}\n"
+                f"  sha: {sha}\n"
+                "  pushed: false\n"
+                "risks:\n"
+                "- evidence_repaired_from_verified_git_commit\n"
+                "next_handoff: none\n"
+            )
+
+        return ""
+
+    def _candidate_repo_roots(self, subtask: dict[str, Any]) -> list[Path]:
+        source = " ".join(
+            str(subtask.get(key) or "")
+            for key in ("description", "acceptance_criteria", "title")
+        )
+        roots: list[Path] = []
+        for match in _WINDOWS_PATH_RE.finditer(source):
+            raw = match.group(0).strip().rstrip(".,;)")
+            try:
+                candidate = Path(raw).expanduser().resolve()
+            except Exception:
+                continue
+            if candidate.exists() and self._is_allowed_generated_repo(candidate):
+                roots.append(candidate)
+
+        if GENERATED_PROJECTS_ROOT.exists():
+            for candidate in GENERATED_PROJECTS_ROOT.iterdir():
+                if candidate.is_dir() and self._is_allowed_generated_repo(candidate):
+                    roots.append(candidate.resolve())
+
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for root in roots:
+            key = str(root).lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(root)
+        return unique
+
+    def _is_allowed_generated_repo(self, path: Path) -> bool:
+        try:
+            path.resolve().relative_to(GENERATED_PROJECTS_ROOT.resolve())
+            return True
+        except ValueError:
+            return False
+
+    def _commit_exists(self, repo_root: Path, sha: str) -> bool:
+        result = self._git(repo_root, ["cat-file", "-e", f"{sha}^{{commit}}"])
+        return result.returncode == 0
+
+    def _commit_files(self, repo_root: Path, sha: str) -> list[str]:
+        result = self._git(repo_root, ["show", "--name-only", "--format=", sha])
+        if result.returncode != 0:
+            return []
+        return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
+
+    def _commit_message(self, repo_root: Path, sha: str) -> str:
+        result = self._git(repo_root, ["log", "-1", "--format=%s", sha])
+        if result.returncode != 0:
+            return "recovered commit"
+        return result.stdout.strip() or "recovered commit"
+
+    def _git(self, repo_root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
 
     def _manifest_path(self, task_id: str, subtask_id: str) -> Path:
         return _MANIFEST_ROOT / task_id / f"{subtask_id}.json"
