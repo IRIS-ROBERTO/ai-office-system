@@ -15,7 +15,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Any
 
-from crewai import Crew, Task, Process
+from crewai import Agent, Crew, Task, Process
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langchain_core.messages import HumanMessage, AIMessage
@@ -627,10 +627,29 @@ class BaseOrchestrator(ABC):
                     metadata={"subtask_id": subtask["id"], "fallback_llm": fallback_llm},
                 )
                 try:
-                    object.__setattr__(crewai_agent, "llm", fallback_llm)
+                    fallback_agent = Agent(
+                        role=crewai_agent.role,
+                        goal=crewai_agent.goal,
+                        backstory=crewai_agent.backstory,
+                        llm=fallback_llm,
+                        tools=list(crewai_agent.tools or []),
+                        verbose=False,
+                        allow_delegation=False,
+                        max_iter=settings.MAX_RETRIES_PER_SUBTASK * 3,
+                        memory=False,
+                    )
+                    object.__setattr__(fallback_agent, "agent_id", agent_id)
+                    object.__setattr__(fallback_agent, "agent_name", getattr(crewai_agent, "agent_name", agent_id))
+                    object.__setattr__(fallback_agent, "team", self.team)
+                    object.__setattr__(fallback_agent, "role_enum", agent_role_enum)
+                    fallback_task = Task(
+                        description=crewai_task.description,
+                        expected_output=crewai_task.expected_output,
+                        agent=fallback_agent,
+                    )
                     fallback_crew = Crew(
-                        agents=[crewai_agent],
-                        tasks=[crewai_task],
+                        agents=[fallback_agent],
+                        tasks=[fallback_task],
                         process=Process.sequential,
                         verbose=False,
                     )
