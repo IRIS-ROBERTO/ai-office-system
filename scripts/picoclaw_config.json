@@ -19,7 +19,18 @@
       "enabled": true
     }
   ],
-  "channels": {},
+  "channels": {
+    "pico": {
+      "enabled": true,
+      "token": "iris-local-pico-token",
+      "allow_token_query": false,
+      "allow_origins": [],
+      "ping_interval": 30,
+      "read_timeout": 60,
+      "max_connections": 100,
+      "allow_from": ["*"]
+    }
+  },
   "tools": {
     "web": {
       "duckduckgo": {

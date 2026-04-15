@@ -65,16 +65,24 @@ if (-not $ConfigOnly) {
         Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpZip -UseBasicParsing
         Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
 
-        $downloadedExe = Get-ChildItem -Path $tmpDir -Recurse -File |
-            Where-Object { $_.Name -match "picoclaw.*\.exe$" } |
+        $downloadedExe = Get-ChildItem -Path $tmpDir -Recurse -File -Filter "picoclaw.exe" |
+            Where-Object { $_.Name -eq "picoclaw.exe" } |
+            Sort-Object Length -Descending |
             Select-Object -First 1
 
         if (-not $downloadedExe) {
-            throw "No PicoClaw executable found inside $tmpZip."
+            $foundExecutables = Get-ChildItem -Path $tmpDir -Recurse -File -Filter "*.exe" |
+                ForEach-Object { $_.Name } |
+                Sort-Object
+            throw "PicoClaw CLI executable picoclaw.exe not found inside $tmpZip. Found: $($foundExecutables -join ', ')"
         }
 
         Copy-Item -Path $downloadedExe.FullName -Destination $PicoClawExe -Force
-        Write-Host "[+] Downloaded to: $PicoClawExe" -ForegroundColor Green
+        $installedSize = (Get-Item -LiteralPath $PicoClawExe).Length
+        if ($installedSize -lt 10000000) {
+            throw "Installed PicoClaw binary is unexpectedly small ($installedSize bytes). This usually means a launcher executable was selected instead of the CLI."
+        }
+        Write-Host "[+] Downloaded CLI to: $PicoClawExe ($installedSize bytes)" -ForegroundColor Green
     } catch {
         Write-Host "[!] Download failed: $_" -ForegroundColor Red
         Write-Host "    Download manually from: https://github.com/sipeed/picoclaw/releases/latest" -ForegroundColor Yellow
@@ -123,8 +131,16 @@ if ($taskExists) {
             -Settings $settings -RunLevel Highest -Force | Out-Null
         Write-Host "[+] Scheduled task created: '$taskName' (starts at login)" -ForegroundColor Green
     } catch {
-        Write-Host "[!] Could not create scheduled task: $_" -ForegroundColor Yellow
-        Write-Host "    PicoClaw will still be started for this session." -ForegroundColor Yellow
+        Write-Host "[~] Elevated scheduled task failed: $_" -ForegroundColor Yellow
+        Write-Host "    Retrying as current user without elevation." -ForegroundColor Yellow
+        try {
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+                -Settings $settings -Force | Out-Null
+            Write-Host "[+] Scheduled task created: '$taskName' (current user, starts at login)" -ForegroundColor Green
+        } catch {
+            Write-Host "[!] Could not create scheduled task: $_" -ForegroundColor Yellow
+            Write-Host "    PicoClaw will still be started for this session." -ForegroundColor Yellow
+        }
     }
 }
 
@@ -135,6 +151,8 @@ if (Test-Path -LiteralPath $PicoClawExe) {
 
     Write-Host "[~] Starting PicoClaw gateway..." -ForegroundColor Yellow
     $env:PICOCLAW_HOME = $PicoClawHome
+    $env:PICOCLAW_CONFIG = $TargetConfig
+    $env:PICOCLAW_GATEWAY_HOST = "127.0.0.1"
     $env:PICOCLAW_GATEWAY_PORT = "$GatewayPort"
     Start-Process -FilePath $PicoClawExe -ArgumentList @("gateway") `
         -WorkingDirectory $PicoClawHome `

@@ -3,7 +3,7 @@ Command-line release gate for IRIS.
 
 Usage:
   python scripts/release_gate.py
-  python scripts/release_gate.py --api http://127.0.0.1:8123
+  python scripts/release_gate.py --api http://127.0.0.1:8124
 
 Exit code:
   0 = production_ready true
@@ -20,7 +20,7 @@ from urllib.request import urlopen
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run IRIS production readiness gate.")
-    parser.add_argument("--api", default="http://127.0.0.1:8123", help="IRIS API base URL")
+    parser.add_argument("--api", default="http://127.0.0.1:8124", help="IRIS API base URL")
     args = parser.parse_args()
 
     url = args.api.rstrip("/") + "/production-readiness"

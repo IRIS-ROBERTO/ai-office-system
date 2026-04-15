@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useOfficeStore } from '../state/officeStore';
 
 // Suporta override via variável de ambiente Vite para deploy em produção
-const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000/ws';
+const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://127.0.0.1:8124/ws';
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;

@@ -20,8 +20,8 @@ set "REDIS_SERVER=%REDIS_RUNTIME%\redis-server.exe"
 set "REDIS_CLI=%REDIS_RUNTIME%\redis-cli.exe"
 set "SERVICE_RUNNER=%ROOT%\scripts\run_iris_service.ps1"
 set "BACKEND_MODULE=backend.api.main:app"
-set "BACKEND_PORT=8123"
-set "FRONTEND_PORT=5123"
+set "BACKEND_PORT=8124"
+set "FRONTEND_PORT=5124"
 set "REDIS_PORT=6379"
 set "REDIS_CONTAINER_NAME=ai-office-redis"
 set "API_URL=http://127.0.0.1:%BACKEND_PORT%"
@@ -251,7 +251,7 @@ echo          Para tempo real completo, use Docker Desktop, WSL ou redis-server 
 
 echo.
 echo  [BACKEND] Iniciando FastAPI em %API_URL%...
-start "IRIS-Backend" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVICE_RUNNER%" -Title "IRIS-Backend" -WorkingDirectory "%ROOT%" -Executable "%VENV%\python.exe" -LogPath "%BACKEND_LOG%" -EnvLine "REDIS_URL=redis://127.0.0.1:%REDIS_PORT%|PYTHONUTF8=1|PYTHONIOENCODING=utf-8|MAX_RETRIES_PER_SUBTASK=2|SUBTASK_EXECUTION_TIMEOUT_SECONDS=240" -ArgumentLine "-m|uvicorn|%BACKEND_MODULE%|--host|127.0.0.1|--port|%BACKEND_PORT%|--log-level|info"
+start "IRIS-Backend" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVICE_RUNNER%" -Title "IRIS-Backend" -WorkingDirectory "%ROOT%" -Executable "%VENV%\python.exe" -LogPath "%BACKEND_LOG%" -EnvLine "REDIS_URL=redis://127.0.0.1:%REDIS_PORT%|PICOCLAW_HOST=http://127.0.0.1:18790|PICOCLAW_ENABLED=true|PICOCLAW_REQUIRED=true|PYTHONUTF8=1|PYTHONIOENCODING=utf-8|MAX_RETRIES_PER_SUBTASK=2|SUBTASK_EXECUTION_TIMEOUT_SECONDS=240" -ArgumentLine "-m|uvicorn|%BACKEND_MODULE%|--host|127.0.0.1|--port|%BACKEND_PORT%|--log-level|info"
 call :WaitForHttp "%API_URL%/docs" 45
 if errorlevel 1 (
     echo  [ERRO] Backend nao respondeu em %API_URL%/docs
@@ -332,7 +332,7 @@ call :EnsurePortFree %BACKEND_PORT%
 if not errorlevel 1 exit /b 0
 
 echo  [AVISO] A porta %BACKEND_PORT% esta ocupada. Procurando backend limpo...
-for %%P in (8124 8125 8126 8127 8128) do (
+for %%P in (8125 8126 8127 8128 8129) do (
     call :EnsurePortFree %%P
     if not errorlevel 1 (
         set "BACKEND_PORT=%%P"
@@ -348,7 +348,7 @@ call :EnsurePortFree %FRONTEND_PORT%
 if not errorlevel 1 exit /b 0
 
 echo  [AVISO] A porta %FRONTEND_PORT% esta ocupada. Procurando frontend limpo...
-for %%P in (5124 5125 5126 5127 5128) do (
+for %%P in (5125 5126 5127 5128 5129) do (
     call :EnsurePortFree %%P
     if not errorlevel 1 (
         set "FRONTEND_PORT=%%P"
