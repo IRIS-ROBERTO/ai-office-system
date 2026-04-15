@@ -26,6 +26,7 @@ Config: see scripts/picoclaw_config.yaml for MCP server connections.
 Requirements:
   PICOCLAW_HOST=http://localhost:8765  (default)
   PICOCLAW_ENABLED=true
+  PICOCLAW_REQUIRED=false              (optional release dependency by default)
 """
 import json
 import logging
@@ -167,12 +168,14 @@ class PicoClawMCPTool(BaseTool):
 async def check_picoclaw_health() -> dict[str, Any]:
     enabled = getattr(settings, "PICOCLAW_ENABLED", True)
     host = getattr(settings, "PICOCLAW_HOST", "http://localhost:8765")
+    required = getattr(settings, "PICOCLAW_REQUIRED", False)
     binary_path = Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "picoclaw.exe"
     config_path = Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "config.yaml"
     if not enabled:
         return {
             "status": "disabled",
             "host": host,
+            "required": required,
             "installed": binary_path.exists(),
             "binary_path": str(binary_path),
             "config_path": str(config_path),
@@ -185,6 +188,7 @@ async def check_picoclaw_health() -> dict[str, Any]:
             return {
                 "status": "degraded",
                 "host": host,
+                "required": required,
                 "installed": binary_path.exists(),
                 "binary_path": str(binary_path),
                 "config_path": str(config_path),
@@ -198,6 +202,7 @@ async def check_picoclaw_health() -> dict[str, Any]:
         return {
             "status": "online",
             "host": host,
+            "required": required,
             "installed": binary_path.exists(),
             "binary_path": str(binary_path),
             "config_path": str(config_path),
@@ -207,6 +212,7 @@ async def check_picoclaw_health() -> dict[str, Any]:
         return {
             "status": "offline",
             "host": host,
+            "required": required,
             "installed": binary_path.exists(),
             "binary_path": str(binary_path),
             "config_path": str(config_path),
@@ -216,6 +222,7 @@ async def check_picoclaw_health() -> dict[str, Any]:
         return {
             "status": "error",
             "host": host,
+            "required": required,
             "installed": binary_path.exists(),
             "binary_path": str(binary_path),
             "config_path": str(config_path),
@@ -227,6 +234,7 @@ def get_picoclaw_status() -> dict[str, Any]:
     return {
         "enabled": getattr(settings, "PICOCLAW_ENABLED", True),
         "host": getattr(settings, "PICOCLAW_HOST", "http://localhost:8765"),
+        "required": getattr(settings, "PICOCLAW_REQUIRED", False),
         "binary_path": str(Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "picoclaw.exe"),
         "config_path": str(Path(os.getenv("LOCALAPPDATA", "")) / "PicoClaw" / "config.yaml"),
         "gateway": "PicoClaw MCP HTTP bridge",

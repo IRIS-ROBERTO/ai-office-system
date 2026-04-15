@@ -53,12 +53,22 @@ def build_production_readiness_report(
 
     picoclaw = health.get("picoclaw") or {}
     if picoclaw.get("status") != "online":
-        blockers.append(
-            {
-                "code": "picoclaw_offline",
-                "message": "PicoClaw esta instalado, mas a bridge HTTP nao esta online.",
-            }
-        )
+        item = {
+            "code": "picoclaw_offline",
+            "message": "PicoClaw esta instalado, mas a bridge HTTP nao esta online.",
+        }
+        if bool(picoclaw.get("required")):
+            blockers.append(item)
+        else:
+            warnings.append(
+                {
+                    "code": "picoclaw_optional_offline",
+                    "message": (
+                        "PicoClaw esta indisponivel, mas PICOCLAW_REQUIRED=false; "
+                        "agentes seguem sem essa bridge de plugins."
+                    ),
+                }
+            )
 
     if int(health.get("active_tasks") or 0) > 0:
         warnings.append(
@@ -130,6 +140,7 @@ def build_production_readiness_report(
             "event_bus_persistent": health.get("event_bus_persistent"),
             "ollama": health.get("ollama"),
             "picoclaw_status": picoclaw.get("status"),
+            "picoclaw_required": picoclaw.get("required"),
             "active_tasks": health.get("active_tasks"),
         },
         "delivery_audit": {
@@ -246,6 +257,8 @@ def _next_actions(blockers: list[dict[str, str]], warnings: list[dict[str, str]]
         actions.append("Limpar workspace: commitar mudancas intencionais e remover artefatos gerados/cache.")
     if "picoclaw_offline" in codes:
         actions.append("Ativar PicoClaw bridge HTTP ou marcar a integracao como desabilitada para producao.")
+    if "picoclaw_optional_offline" in codes:
+        actions.append("Concluir ajuste PicoClaw schema v2/gateway antes de depender dele em tarefas criticas.")
     if "redis_offline" in codes or "event_bus_not_persistent" in codes:
         actions.append("Garantir Redis persistente e healthcheck obrigatorio no deploy.")
     if "no_functional_ready_delivery" in codes or "no_approved_delivery" in codes:

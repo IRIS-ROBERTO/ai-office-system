@@ -56,6 +56,7 @@ class Settings(BaseSettings):
 
     PICOCLAW_HOST: str = "http://localhost:8765"
     PICOCLAW_ENABLED: bool = True
+    PICOCLAW_REQUIRED: bool = False
 
     MAX_CONCURRENT_AGENTS: int = 2
     SENIOR_MAX_TOKENS: int = 2048
