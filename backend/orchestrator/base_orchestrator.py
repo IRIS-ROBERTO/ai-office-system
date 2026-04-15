@@ -29,11 +29,41 @@ from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamTy
 from backend.core.gold_standard import REPO_ROOT, build_gold_standard_prompt
 from backend.core.improvement_loop import improvement_loop
 from backend.core.state import TaskState
-from backend.tools.ollama_tool import get_senior_llm
+from backend.tools.ollama_tool import get_crewai_llm_str, get_senior_llm
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = settings.MAX_RETRIES_PER_SUBTASK
+
+
+def _is_transient_model_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "429",
+            "rate limit",
+            "ratelimit",
+            "too many requests",
+            "high demand",
+            "provider error",
+            "openrouter",
+        )
+    )
+
+
+def _extract_json_object(raw: str) -> str:
+    cleaned = (raw or "").strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        cleaned = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+        cleaned = cleaned.strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return cleaned[start : end + 1]
+    return cleaned
 
 # ---------------------------------------------------------------------------
 # Role → agent_id look-up tables (one per team)
@@ -319,12 +349,7 @@ class BaseOrchestrator(ABC):
             raw_content = ""
 
         try:
-            # Strip markdown code fences if present
-            cleaned = raw_content.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                cleaned = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-
+            cleaned = _extract_json_object(raw_content)
             parsed: dict = json.loads(cleaned)
             senior_directive: str = parsed.get("senior_directive", "")
             raw_subtasks: list[dict] = parsed.get("subtasks", [])
@@ -370,15 +395,7 @@ class BaseOrchestrator(ABC):
                 agent_role=AgentRole.ORCHESTRATOR.value,
             )
             senior_directive = "Executar a requisição com qualidade máxima e atenção aos detalhes."
-            subtasks = [
-                {
-                    "id": str(uuid.uuid4()),
-                    "title": "Executar requisição completa",
-                    "description": state["original_request"],
-                    "assigned_role": self._default_role(),
-                    "acceptance_criteria": "Entregável completo e funcional conforme requisição",
-                }
-            ]
+            subtasks = self._fallback_subtasks_for_request(state["original_request"])
 
         result = {
             "senior_directive": senior_directive,
@@ -592,17 +609,74 @@ class BaseOrchestrator(ABC):
                 metadata={"subtask_id": subtask["id"], "timeout_seconds": timeout_s},
             )
         except Exception as exc:
-            logger.error(f"[execute_subtask] Erro ao executar subtarefa '{subtask['title']}': {exc}")
-            output_text = f"ERRO: {exc}"
-            self._trace(
-                task_id,
-                "subtask_error",
-                f"Erro ao executar subtarefa '{subtask['title']}': {exc}",
-                level="error",
-                agent_id=agent_id,
-                agent_role=agent_role_enum.value,
-                metadata={"subtask_id": subtask["id"]},
-            )
+            if _is_transient_model_error(exc):
+                fallback_llm = get_crewai_llm_str(role)
+                logger.warning(
+                    "[execute_subtask] Modelo remoto falhou para '%s'; fallback local %s. Erro: %s",
+                    subtask["title"],
+                    fallback_llm,
+                    exc,
+                )
+                self._trace(
+                    task_id,
+                    "model_fallback",
+                    f"Modelo remoto indisponivel/rate limited; fallback local aplicado: {fallback_llm}.",
+                    level="warning",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"], "fallback_llm": fallback_llm},
+                )
+                try:
+                    object.__setattr__(crewai_agent, "llm", fallback_llm)
+                    fallback_crew = Crew(
+                        agents=[crewai_agent],
+                        tasks=[crewai_task],
+                        process=Process.sequential,
+                        verbose=False,
+                    )
+                    heartbeat_task = asyncio.create_task(
+                        self._emit_execution_heartbeat(task_id, subtask, agent_id, agent_role_enum)
+                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(fallback_crew.kickoff),
+                            timeout=settings.SUBTASK_EXECUTION_TIMEOUT_SECONDS,
+                        )
+                    finally:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
+                    output_text = str(result) if result else ""
+                except Exception as fallback_exc:
+                    logger.error(
+                        "[execute_subtask] Fallback local tambem falhou para '%s': %s",
+                        subtask["title"],
+                        fallback_exc,
+                    )
+                    output_text = f"ERRO: remoto falhou ({exc}); fallback local falhou ({fallback_exc})"
+                    self._trace(
+                        task_id,
+                        "subtask_error",
+                        f"Fallback local falhou para '{subtask['title']}': {fallback_exc}",
+                        level="error",
+                        agent_id=agent_id,
+                        agent_role=agent_role_enum.value,
+                        metadata={"subtask_id": subtask["id"]},
+                    )
+            else:
+                logger.error(f"[execute_subtask] Erro ao executar subtarefa '{subtask['title']}': {exc}")
+                output_text = f"ERRO: {exc}"
+                self._trace(
+                    task_id,
+                    "subtask_error",
+                    f"Erro ao executar subtarefa '{subtask['title']}': {exc}",
+                    level="error",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
 
         # Accumulate outputs
         updated_outputs = dict(state.get("agent_outputs") or {})
@@ -1246,6 +1320,48 @@ class BaseOrchestrator(ABC):
         if self.team == TeamType.DEV:
             return "backend"
         return "content"
+
+    def _fallback_subtasks_for_request(self, request: str) -> list[dict]:
+        """Deterministic fallback when senior planning returns malformed JSON."""
+        normalized = request.lower()
+        if self.team == TeamType.DEV:
+            web_markers = (
+                "web",
+                "frontend",
+                "interface",
+                "html",
+                "css",
+                "javascript",
+                "app estatica",
+                "aplicacao web",
+                "aplicação web",
+            )
+            role = "frontend" if any(marker in normalized for marker in web_markers) else "backend"
+            return [
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": "Implementar entrega principal com evidencias",
+                    "description": request,
+                    "assigned_role": role,
+                    "acceptance_criteria": (
+                        "Criar ou alterar arquivos reais via workspace_file, executar validacao objetiva, "
+                        "criar commit local via github_commit e responder com DELIVERY_EVIDENCE completo."
+                    ),
+                }
+            ]
+
+        return [
+            {
+                "id": str(uuid.uuid4()),
+                "title": "Executar entrega principal com evidencias",
+                "description": request,
+                "assigned_role": self._default_role(),
+                "acceptance_criteria": (
+                    "Produzir artefatos reais, registrar validacao objetiva, criar commit local quando "
+                    "houver arquivos e responder com DELIVERY_EVIDENCE completo."
+                ),
+            }
+        ]
 
     def _find_agent_by_role(self, role: str):
         """

@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     PICOCLAW_ENABLED: bool = True
 
     MAX_CONCURRENT_AGENTS: int = 2
-    SENIOR_MAX_TOKENS: int = 1024
+    SENIOR_MAX_TOKENS: int = 2048
     LOCAL_MAX_TOKENS: int = 2048
     ANIMATION_QUEUE_BUFFER_MS: int = 500
 
