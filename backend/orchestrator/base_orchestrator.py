@@ -306,7 +306,8 @@ class BaseOrchestrator(ABC):
             "sem vírgulas e sem múltiplos responsáveis. Se houver colaboração, crie subtarefas separadas.\n"
             "Cada subtarefa versionável deve incluir nos critérios: alteração real via workspace_file, "
             "validação objetiva, commit local via github_commit e DELIVERY_EVIDENCE com SHA real.\n"
-            "Gere entre 2 e 6 subtarefas. Não inclua texto fora do JSON."
+            "Gere entre 1 e 6 subtarefas. Se a requisição pedir tarefa atomica/simples, "
+            "crie uma única subtarefa com o role mais adequado. Não inclua texto fora do JSON."
         )
 
         messages = [
