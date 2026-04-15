@@ -28,6 +28,10 @@ from backend.core.execution_trace import append_execution_log
 from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamType
 from backend.core.gold_standard import REPO_ROOT, build_gold_standard_prompt
 from backend.core.improvement_loop import improvement_loop
+from backend.core.static_web_delivery import (
+    can_handle_static_web_delivery,
+    execute_static_web_delivery,
+)
 from backend.core.state import TaskState
 from backend.tools.ollama_tool import get_crewai_llm_str, get_senior_llm
 
@@ -168,12 +172,31 @@ class BaseOrchestrator(ABC):
     # ------------------------------------------------------------------
 
     def _role_to_agent_id(self, role: str) -> str:
+        role = self._normalize_role(role)
         if self.team == TeamType.DEV:
             return _DEV_ROLE_TO_AGENT_ID.get(role, f"dev_{role}_01")
         return _MKT_ROLE_TO_AGENT_ID.get(role, f"mkt_{role}_01")
 
     def _role_to_enum(self, role: str) -> AgentRole:
+        role = self._normalize_role(role)
         return _ROLE_TO_AGENT_ROLE_ENUM.get(role, AgentRole.ORCHESTRATOR)
+
+    def _normalize_role(self, role: str | None) -> str:
+        normalized = (role or "").strip().lower()
+        aliases = {
+            "front-end": "frontend",
+            "front end": "frontend",
+            "ui": "frontend",
+            "ux": "frontend",
+            "doc": "docs",
+            "docos": "docs",
+            "documentation": "docs",
+            "tester": "qa",
+            "quality": "qa",
+        }
+        normalized = aliases.get(normalized, normalized)
+        available = _DEV_ROLE_TO_AGENT_ID if self.team == TeamType.DEV else _MKT_ROLE_TO_AGENT_ID
+        return normalized if normalized in available else self._default_role()
 
     def _trace(
         self,
@@ -282,6 +305,34 @@ class BaseOrchestrator(ABC):
             agent_role=AgentRole.ORCHESTRATOR.value,
         )
 
+        if self._wants_atomic_subtask(state["original_request"]):
+            senior_directive = (
+                "Executar a solicitação como entrega atômica: um único agente deve produzir "
+                "os arquivos reais, validar objetivamente, commitar localmente e retornar "
+                "DELIVERY_EVIDENCE completo. Não dividir em fases, não delegar planejamento "
+                "separado e não encerrar sem commit verificável."
+            )
+            subtasks = self._fallback_subtasks_for_request(state["original_request"])
+            self._trace(
+                task_id,
+                "senior_planning_complete",
+                "Planejamento atomico aplicado com 1 subtarefa.",
+                agent_id=orch_id,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={"subtask_count": len(subtasks), "mode": "atomic_override"},
+            )
+            result = {
+                "senior_directive": senior_directive,
+                "subtasks": subtasks,
+                "current_subtask_index": 0,
+                "messages": [
+                    HumanMessage(content=state["original_request"]),
+                    AIMessage(content=senior_directive),
+                ],
+            }
+            self._report_progress({**state, **result})
+            return result
+
         system_prompt = (
             f"{self._senior_system_context}\n\n"
             "Você é o Orquestrador Sênior do AI Office System.\n"
@@ -367,7 +418,7 @@ class BaseOrchestrator(ABC):
                         "id": st.get("id") or str(uuid.uuid4()),
                         "title": st.get("title", "Subtarefa"),
                         "description": st.get("description", ""),
-                        "assigned_role": st.get("assigned_role", ""),
+                        "assigned_role": self._normalize_role(st.get("assigned_role", "")),
                         "acceptance_criteria": str(ac),
                     }
                 )
@@ -516,6 +567,106 @@ class BaseOrchestrator(ABC):
             agent_role=agent_role_enum.value,
             metadata={"subtask_id": subtask["id"], "retry_count": state["retry_count"]},
         )
+
+        if can_handle_static_web_delivery(subtask):
+            try:
+                output_text = execute_static_web_delivery(
+                    task_id=task_id,
+                    subtask_id=subtask["id"],
+                    agent_id=agent_id,
+                    subtask=subtask,
+                )
+                self._trace(
+                    task_id,
+                    "deterministic_executor",
+                    "Executor deterministico frontend entregou projeto web estatico.",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
+            except Exception as exc:
+                output_text = f"ERRO: executor deterministico frontend falhou: {exc}"
+                self._trace(
+                    task_id,
+                    "deterministic_executor_failed",
+                    f"Executor deterministico frontend falhou: {exc}",
+                    level="error",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
+
+            updated_outputs = dict(state.get("agent_outputs") or {})
+            updated_outputs[subtask["id"]] = output_text
+            updated_evidence = dict(state.get("delivery_evidence") or {})
+            updated_manifests = dict(state.get("delivery_manifests") or {})
+
+            manifest = delivery_runner.evaluate_subtask_output(
+                task_id=task_id,
+                subtask=subtask,
+                output_text=output_text,
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                team=self.team.value,
+                require_commit=True,
+            )
+            updated_manifests[subtask["id"]] = manifest.to_dict()
+            self._trace(
+                task_id,
+                "delivery_manifest",
+                f"Delivery Runner avaliou '{subtask['title']}' com approved={manifest.approved}.",
+                agent_id=self.ORCHESTRATOR_AGENT_ID,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={
+                    "subtask_id": subtask["id"],
+                    "approved": manifest.approved,
+                    "manifest_path": manifest.manifest_path,
+                    "failed_stages": [
+                        stage.name for stage in manifest.stages if stage.required and not stage.passed
+                    ],
+                },
+            )
+
+            evidence_payload = dict(manifest.evidence or {})
+            if evidence_payload:
+                evidence_payload["approved"] = manifest.approved
+                evidence_payload["feedback"] = manifest.feedback
+                evidence_payload["manifest_path"] = manifest.manifest_path
+                updated_evidence[subtask["id"]] = evidence_payload
+
+                commit_sha = str(evidence_payload.get("commit_sha") or "")
+                if manifest.approved and commit_sha:
+                    await _emit(
+                        EventType.GIT_COMMIT,
+                        self.team,
+                        agent_id,
+                        agent_role_enum,
+                        task_id=task_id,
+                        payload={
+                            "subtask_id": subtask["id"],
+                            "sha": commit_sha,
+                            "message": evidence_payload.get("commit_message"),
+                            "files": evidence_payload.get("files_changed"),
+                            "pushed": evidence_payload.get("pushed"),
+                            "manifest_path": manifest.manifest_path,
+                        },
+                    )
+
+            self._trace(
+                task_id,
+                "subtask_complete",
+                f"Subtarefa '{subtask['title']}' encerrou execucao.",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+            )
+            result = {
+                "agent_outputs": updated_outputs,
+                "delivery_evidence": updated_evidence,
+                "delivery_manifests": updated_manifests,
+            }
+            self._report_progress({**state, **result})
+            return result
 
         # Build/reuse crew
         if self._crew is None:
@@ -825,6 +976,39 @@ class BaseOrchestrator(ABC):
         role: str = subtask.get("assigned_role", self._default_role())
         agent_id = self._role_to_agent_id(role)
         agent_role_enum = self._role_to_enum(role)
+
+        manifest_payload = (state.get("delivery_manifests") or {}).get(subtask["id"]) or {}
+        if manifest_payload.get("approved") is True:
+            self._trace(
+                task_id,
+                "quality_gate_result",
+                f"Delivery Runner aprovou '{subtask['title']}'; quality gate deterministico aceito.",
+                agent_id=self.ORCHESTRATOR_AGENT_ID,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={
+                    "subtask_id": subtask["id"],
+                    "approved": True,
+                    "source": "delivery_runner",
+                    "manifest_path": manifest_payload.get("manifest_path"),
+                },
+            )
+            await _emit(
+                EventType.TASK_COMPLETED,
+                self.team,
+                agent_id,
+                agent_role_enum,
+                task_id=task_id,
+                payload={
+                    "subtask_id": subtask["id"],
+                    "approved": True,
+                    "feedback": manifest_payload.get("feedback", "Delivery Runner approved."),
+                    "manifest_path": manifest_payload.get("manifest_path"),
+                },
+            )
+            return {
+                "quality_approved": True,
+                "current_subtask_index": idx,
+            }
 
         deterministic_gate = validate_delivery_evidence(
             output_text,
@@ -1345,18 +1529,7 @@ class BaseOrchestrator(ABC):
         """Deterministic fallback when senior planning returns malformed JSON."""
         normalized = request.lower()
         if self.team == TeamType.DEV:
-            web_markers = (
-                "web",
-                "frontend",
-                "interface",
-                "html",
-                "css",
-                "javascript",
-                "app estatica",
-                "aplicacao web",
-                "aplicação web",
-            )
-            role = "frontend" if any(marker in normalized for marker in web_markers) else "backend"
+            role = self._infer_dev_role_for_request(normalized)
             return [
                 {
                     "id": str(uuid.uuid4()),
@@ -1365,7 +1538,10 @@ class BaseOrchestrator(ABC):
                     "assigned_role": role,
                     "acceptance_criteria": (
                         "Criar ou alterar arquivos reais via workspace_file, executar validacao objetiva, "
-                        "criar commit local via github_commit e responder com DELIVERY_EVIDENCE completo."
+                        "criar commit local via github_commit e responder com DELIVERY_EVIDENCE completo. "
+                        "Para entrega web estatica, index.html deve referenciar assets existentes, "
+                        "src/app.js deve ser JavaScript vanilla executavel direto no navegador, sem React/JSX "
+                        "sem build e sem codigo de teste misturado no runtime."
                     ),
                 }
             ]
@@ -1382,6 +1558,41 @@ class BaseOrchestrator(ABC):
                 ),
             }
         ]
+
+    def _wants_atomic_subtask(self, request: str) -> bool:
+        normalized = request.lower()
+        markers = (
+            "atomico",
+            "atômico",
+            "unica subtarefa",
+            "única subtarefa",
+            "uma unica subtarefa",
+            "uma única subtarefa",
+            "nao divida",
+            "não divida",
+            "single subtask",
+            "one subtask",
+        )
+        return any(marker in normalized for marker in markers)
+
+    def _infer_dev_role_for_request(self, normalized_request: str) -> str:
+        web_markers = (
+            "web",
+            "frontend",
+            "interface",
+            "html",
+            "css",
+            "javascript",
+            "app estatica",
+            "app estática",
+            "aplicacao web",
+            "aplicação web",
+            "ui",
+            "responsiva",
+        )
+        if any(marker in normalized_request for marker in web_markers):
+            return "frontend"
+        return "backend"
 
     def _find_agent_by_role(self, role: str):
         """

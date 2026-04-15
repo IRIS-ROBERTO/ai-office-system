@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     MAX_RETRIES_PER_SUBTASK: int = 2
     QUALITY_GATE_ENABLED: bool = True
-    SUBTASK_EXECUTION_TIMEOUT_SECONDS: int = 240
+    SUBTASK_EXECUTION_TIMEOUT_SECONDS: int = 420
     EXECUTION_HEARTBEAT_SECONDS: int = 20
 
     class Config:

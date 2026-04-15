@@ -110,6 +110,9 @@ class DeliveryRunner:
                     evidence_result = repaired_result
 
         stages.extend(self._evidence_stages(evidence_result, require_commit=require_commit))
+        functional_stage = self._functional_readiness_stage(evidence_result, subtask)
+        if functional_stage:
+            stages.append(functional_stage)
 
         required_failures = [
             stage for stage in stages if stage.required and not stage.passed
@@ -249,6 +252,126 @@ class DeliveryRunner:
                 },
             ),
         ]
+
+    def _functional_readiness_stage(
+        self,
+        evidence_result: EvidenceValidationResult,
+        subtask: dict[str, Any],
+    ) -> DeliveryStage | None:
+        source = " ".join(
+            str(subtask.get(key) or "")
+            for key in ("title", "description", "acceptance_criteria")
+        ).lower()
+        web_markers = ("web", "frontend", "html", "css", "javascript", "interface", "responsiva")
+        if not any(marker in source for marker in web_markers):
+            return None
+
+        evidence = evidence_result.evidence
+        if evidence is None or not evidence_result.approved:
+            return None
+
+        try:
+            repo_root = Path(evidence.repo_path).expanduser().resolve()
+        except Exception as exc:
+            return DeliveryStage(
+                name="FUNCTIONAL_READINESS",
+                status="failed",
+                message=f"repo_path invalido para validacao funcional: {exc}",
+            )
+
+        index_path = repo_root / "index.html"
+        if not index_path.exists():
+            return DeliveryStage(
+                name="FUNCTIONAL_READINESS",
+                status="failed",
+                message="Entrega web sem index.html na raiz do projeto.",
+                metadata={"repo_path": str(repo_root)},
+            )
+
+        html = index_path.read_text(encoding="utf-8", errors="replace")
+        referenced_assets = self._html_asset_refs(html)
+        missing_assets: list[str] = []
+        for asset in referenced_assets:
+            target = (repo_root / asset).resolve()
+            try:
+                target.relative_to(repo_root)
+            except ValueError:
+                missing_assets.append(asset)
+                continue
+            if not target.exists():
+                missing_assets.append(asset)
+
+        issues: list[str] = []
+        if missing_assets:
+            issues.append("assets referenciados inexistentes: " + ", ".join(sorted(missing_assets)))
+
+        js_files = [asset for asset in referenced_assets if asset.lower().endswith(".js")]
+        if not js_files:
+            js_files = [
+                file_path
+                for file_path in evidence.files_changed
+                if file_path.lower().endswith(".js")
+            ]
+
+        js_checks = self._validate_static_js(repo_root, html, js_files)
+        issues.extend(js_checks)
+
+        if issues:
+            return DeliveryStage(
+                name="FUNCTIONAL_READINESS",
+                status="failed",
+                message="; ".join(issues),
+                metadata={
+                    "repo_path": str(repo_root),
+                    "referenced_assets": referenced_assets,
+                    "js_files": js_files,
+                },
+            )
+
+        return DeliveryStage(
+            name="FUNCTIONAL_READINESS",
+            status="passed",
+            message="Entrega web estatica possui assets referenciados e JS compativel com execucao direta.",
+            metadata={
+                "repo_path": str(repo_root),
+                "referenced_assets": referenced_assets,
+                "js_files": js_files,
+            },
+        )
+
+    def _html_asset_refs(self, html: str) -> list[str]:
+        refs: list[str] = []
+        for match in re.finditer(r"""(?:src|href)\s*=\s*["']([^"']+)["']""", html, re.IGNORECASE):
+            raw = match.group(1).strip()
+            lowered = raw.lower()
+            if not raw or lowered.startswith(("http://", "https://", "data:", "mailto:", "#")):
+                continue
+            refs.append(raw.lstrip("./").replace("\\", "/"))
+        return refs
+
+    def _validate_static_js(self, repo_root: Path, html: str, js_files: list[str]) -> list[str]:
+        issues: list[str] = []
+        html_lower = html.lower()
+        for js_file in js_files:
+            js_path = (repo_root / js_file).resolve()
+            try:
+                js_path.relative_to(repo_root)
+            except ValueError:
+                issues.append(f"javascript fora da raiz permitida: {js_file}")
+                continue
+            if not js_path.exists():
+                continue
+            js = js_path.read_text(encoding="utf-8", errors="replace")
+            js_lower = js.lower()
+            if any(marker in js for marker in ("test(", "expect(", "render(<")):
+                issues.append(f"{js_file} contem codigo de teste misturado no runtime")
+            if ("react." in js_lower or "usestate" in js_lower) and "react" not in html_lower:
+                issues.append(f"{js_file} depende de React, mas index.html nao carrega React")
+            if re.search(r"return\s*\(\s*<", js) and "babel" not in html_lower:
+                issues.append(f"{js_file} contem JSX sem build ou Babel no index.html")
+            if not any(marker in js_lower for marker in ("addeventlistener", "queryselector", "onclick", "onchange")):
+                issues.append(f"{js_file} nao demonstra manipulacao DOM/eventos para interacao real")
+        return issues
 
     def _repair_evidence_from_git(
         self,
