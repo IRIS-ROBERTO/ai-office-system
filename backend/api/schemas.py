@@ -120,6 +120,18 @@ class DeliveryAuditTaskResponse(BaseModel):
     items: list[DeliveryAuditItem]
 
 
+class ProductionReadinessResponse(BaseModel):
+    status: str
+    score: int
+    production_ready: bool
+    blockers: list[dict]
+    warnings: list[dict]
+    runtime: dict
+    delivery_audit: dict
+    git: dict
+    next_actions: list[str]
+
+
 class ServiceRequestCreate(BaseModel):
     title: str
     team: str

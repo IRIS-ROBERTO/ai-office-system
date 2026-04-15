@@ -34,6 +34,7 @@ from backend.core.runtime_registry import agent_registry, seed_agent_registry
 from backend.core.improvement_loop import improvement_loop
 from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_handoff
 from backend.core.agent_personality import get_agent_config, update_agent_config
+from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
 from backend.config.settings import settings
 from backend.tools.brain_router import get_brain_status
@@ -57,6 +58,7 @@ from backend.api.schemas import (
     AgentPersonalityUpdate,
     DeliveryAuditListResponse,
     DeliveryAuditTaskResponse,
+    ProductionReadinessResponse,
 )
 from backend.api.websocket import websocket_endpoint
 
@@ -727,6 +729,18 @@ async def get_picoclaw_integration_status():
         "config": get_picoclaw_status(),
         "policy": list_tool_policies(),
     }
+
+
+@app.get("/production-readiness", response_model=ProductionReadinessResponse)
+async def get_production_readiness():
+    """Executa o release gate objetivo para indicar readiness de producao."""
+    health = await health_check()
+    health_payload = health.model_dump() if hasattr(health, "model_dump") else dict(health)
+    audit_payload = list_delivery_audits(limit=250)
+    return build_production_readiness_report(
+        health=health_payload,
+        delivery_audit=audit_payload,
+    )
 
 
 @app.get("/tool-governance")
