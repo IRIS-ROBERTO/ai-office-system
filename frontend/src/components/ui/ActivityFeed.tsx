@@ -41,6 +41,9 @@ function eventToItem(payload: Record<string, unknown>): FeedItem | null {
     task_heartbeat:      { msg: `Task [${taskId}…] still running`, color: '#38bdf8', icon: '⏱' },
     task_completed:      { msg: `Task [${taskId}…] done`,      color: '#00ff88', icon: '✓' },
     task_failed:         { msg: `Task [${taskId}…] failed`,    color: '#ef4444', icon: '✗' },
+    git_commit:          { msg: `${name} committed ${String(eventPayload.sha || '').slice(0, 8)}`, color: '#22c55e', icon: '◆' },
+    git_push:            { msg: `${name} pushed ${String(eventPayload.sha || '').slice(0, 8)}`, color: '#00ff88', icon: '↑' },
+    commit_failed:       { msg: `${name} commit evidence failed`, color: '#ef4444', icon: '!' },
   };
 
   const cfg = MAP[type];

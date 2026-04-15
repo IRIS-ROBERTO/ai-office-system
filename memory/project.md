@@ -28,3 +28,10 @@ AI Office System em desenvolvimento ativo.
 2. Rodar migrations SQL no Supabase
 3. Testar startup do backend
 4. npm install + testar frontend
+
+## Modelo operacional obrigatório
+- O plano de governança dos agentes está em `docs/agent-operating-model.md`.
+- Nenhuma tarefa versionável deve ser marcada como concluída sem evidência de commit.
+- O quality gate deve exigir arquivos alterados, validação executada e SHA de commit.
+- Projetos complexos não podem ser reduzidos a uma única subtarefa genérica.
+- CROWN deve priorizar evidência operacional sobre resposta textual.

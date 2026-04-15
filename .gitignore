@@ -1,6 +1,7 @@
-# Environment
+# Environment and secrets
 .env
 *.env.local
+frontend/.env.local
 
 # Python
 __pycache__/
@@ -10,31 +11,36 @@ __pycache__/
 venv/
 env/
 *.egg-info/
-dist/
-build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# Node / Frontend
+# Node / frontend
 node_modules/
+frontend/node_modules/
+frontend/.claude/
 frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
-# IDE
+# Runtime artifacts
+.runtime/
+agent-deliveries/
+logs/
+*.log
+tmp-*.log
+dump.rdb
+
+# Build outputs
+dist/
+build/
+/public
+/webpack
+
+# IDE / OS
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Redis
-dump.rdb

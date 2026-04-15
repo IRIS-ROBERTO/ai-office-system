@@ -41,6 +41,13 @@ class EventType(str, Enum):
     GIT_COMMIT = "git_commit"
     GIT_PUSH = "git_push"
     REPO_CREATED = "repo_created"
+    BRANCH_CREATED = "branch_created"
+    COMMIT_FAILED = "commit_failed"
+
+    # Artefatos de código em tempo real
+    CODE_ARTIFACT_UPDATED = "code_artifact_updated"
+    FILE_CHANGED = "file_changed"
+    DIFF_PREVIEW = "diff_preview"
 
 
 class TeamType(str, Enum):

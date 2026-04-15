@@ -78,7 +78,7 @@ class DevOrchestrator(BaseOrchestrator):
             agents=[planner, frontend, backend, qa, security, docs],
             tasks=[],          # Tasks are injected dynamically per subtask
             process=Process.sequential,
-            verbose=True,
+            verbose=False,
             # CrewAI memory estava quebrando o runtime local por exigir
             # configuração adicional de embeddings no ambiente.
             # Mantemos o fluxo determinístico sem bloquear a entrega.

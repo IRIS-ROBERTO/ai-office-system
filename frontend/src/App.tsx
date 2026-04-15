@@ -1,315 +1,42 @@
-/**
- * IRIS — AI Office System
- * Premium shell: WebGL canvas + glass morphism HUD + live panels
- */
-import React, { Suspense, lazy, useState, useCallback, useEffect, useRef, startTransition } from 'react';
+import { Suspense, lazy, startTransition, useEffect, useMemo, useState } from 'react';
+import { AgentOperations } from './components/command/AgentOperations';
+import { CommandCenter } from './components/command/CommandCenter';
+import { useOperationsData } from './hooks/useOperationsData';
+import { useOfficeStore, type AgentBootstrapRecord } from './state/officeStore';
 import { useEventStream } from './websocket/useEventStream';
-import { useOfficeStore } from './state/officeStore';
 
-const OfficeLayout = lazy(() => import('./engine/OfficeLayout'));
-const AgentPanel = lazy(() => import('./components/ui/AgentPanel'));
 const ActivityFeed = lazy(() => import('./components/ui/ActivityFeed'));
 const RequestDesk = lazy(() => import('./components/ui/RequestDesk'));
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
-// ─── Color tokens ─────────────────────────────────────────────────────────────
-const C = {
-  bg:         '#03030a',
-  surface:    'rgba(8, 8, 20, 0.82)',
-  border:     'rgba(255, 255, 255, 0.07)',
-  borderDev:  'rgba(0, 200, 255, 0.2)',
-  borderMkt:  'rgba(177, 68, 255, 0.2)',
-  borderGold: 'rgba(251, 191, 36, 0.3)',
-  textPrimary:   '#e2e8f0',
-  textSecondary: '#64748b',
-  textDev:    '#00c8ff',
-  textMkt:    '#b144ff',
-  textGold:   '#fbbf24',
-  green:  '#00ff88',
-  red:    '#ef4444',
-  yellow: '#fbbf24',
-};
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8123';
 
-const PANEL_FALLBACK_STYLE: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: 120,
-  padding: 16,
-  color: C.textSecondary,
-  fontSize: 12,
-  fontFamily: 'monospace',
-  letterSpacing: 0.6,
-};
+type ActiveTab = 'command' | 'intake' | 'agents';
 
-// ─── Utility: Status color ────────────────────────────────────────────────────
-function statusColor(s: string) {
-  switch (s) {
-    case 'working':  return C.green;
-    case 'thinking': return C.yellow;
-    case 'moving':   return C.textDev;
-    case 'idle':     return C.textSecondary;
-    default:         return C.textSecondary;
-  }
-}
+const panelFallback = <div className="empty-state">Carregando módulo operacional...</div>;
 
-function teamColor(team: 'dev' | 'marketing' | 'orchestrator') {
-  switch (team) {
-    case 'dev':
-      return C.textDev;
-    case 'marketing':
-      return C.textMkt;
-    case 'orchestrator':
-      return C.textGold;
-    default:
-      return C.textSecondary;
-  }
-}
-
-// ─── Sub-component: Connection indicator ──────────────────────────────────────
-const ConnectionDot: React.FC<{ connected: boolean }> = ({ connected }) => {
-  const [pulse, setPulse] = useState(false);
-  useEffect(() => {
-    if (!connected) return;
-    const id = setInterval(() => setPulse(p => !p), 1400);
-    return () => clearInterval(id);
-  }, [connected]);
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-      <div style={{
-        width: 8, height: 8, borderRadius: '50%',
-        background: connected ? C.green : C.red,
-        boxShadow: connected && pulse ? `0 0 10px ${C.green}` : 'none',
-        transition: 'box-shadow 0.4s',
-        flexShrink: 0,
-      }} />
-      <span style={{ fontSize: 11, color: connected ? C.green : C.red, fontFamily: 'monospace', letterSpacing: 0.5 }}>
-        {connected ? 'LIVE' : 'DISCONNECTED'}
-      </span>
-    </div>
-  );
-};
-
-// ─── Sub-component: Team stats chip ───────────────────────────────────────────
-const TeamChip: React.FC<{
-  label: string; count: number; working: number; color: string; border: string;
-}> = ({ label, count, working, color, border }) => (
-  <div style={{
-    display: 'flex', alignItems: 'center', gap: 8,
-    background: 'rgba(255,255,255,0.03)',
-    border: `1px solid ${border}`,
-    borderRadius: 10, padding: '5px 12px', flexShrink: 0,
-  }}>
-    <span style={{ fontSize: 10, color, fontFamily: 'monospace', letterSpacing: 1, fontWeight: 700 }}>
-      {label}
-    </span>
-    <div style={{ width: 1, height: 14, background: border }} />
-    <span style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{count}</span>
-    <span style={{ fontSize: 10, color: C.textSecondary }}>agents</span>
-    {working > 0 && (
-      <span style={{
-        fontSize: 9, background: `${color}22`, color, borderRadius: 4,
-        padding: '1px 6px', fontFamily: 'monospace',
-      }}>{working} active</span>
-    )}
-  </div>
-);
-
-// ─── Sub-component: Task stats bar ───────────────────────────────────────────
-const TaskBar: React.FC = () => {
-  const tasks = useOfficeStore(s => s.tasks);
-  const arr = Object.values(tasks);
-  const pending   = arr.filter(t => t.status === 'pending').length;
-  const active    = arr.filter(t => t.status === 'in_progress' || t.status === 'assigned').length;
-  const completed = arr.filter(t => t.status === 'completed').length;
-  const failed    = arr.filter(t => t.status === 'failed').length;
-  const total     = arr.length;
-
-  const items = [
-    { label: 'QUEUE',    n: pending,   col: C.textSecondary },
-    { label: 'RUNNING',  n: active,    col: C.yellow },
-    { label: 'DONE',     n: completed, col: C.green },
-    { label: 'FAILED',   n: failed,    col: C.red },
-  ];
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      {items.map(({ label, n, col }) => (
-        <div key={label} style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          padding: '3px 10px', borderRadius: 8,
-          background: n > 0 ? `${col}11` : 'transparent',
-          minWidth: 50,
-        }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: n > 0 ? col : C.textSecondary,
-            lineHeight: 1, fontFamily: 'monospace' }}>{n}</span>
-          <span style={{ fontSize: 8, color: C.textSecondary, letterSpacing: 0.8, marginTop: 2 }}>{label}</span>
-        </div>
-      ))}
-      {total > 0 && (
-        <>
-          <div style={{ width: 1, height: 28, background: C.border, margin: '0 6px' }} />
-          <span style={{ fontSize: 10, color: C.textSecondary, fontFamily: 'monospace' }}>
-            {total} total
-          </span>
-        </>
-      )}
-    </div>
-  );
-};
-
-// ─── Sub-component: Agent roster sidebar ─────────────────────────────────────
-const AgentRoster: React.FC<{ onAgentClick: (id: string) => void; selectedId: string | null }> = ({
-  onAgentClick, selectedId
-}) => {
-  const agents = useOfficeStore(s => s.agents);
-  const teamOrder: Record<'orchestrator' | 'dev' | 'marketing', number> = {
-    orchestrator: 0,
-    dev: 1,
-    marketing: 2,
-  };
-  const list = Object.values(agents).sort((a, b) => {
-    const byTeam = teamOrder[a.team] - teamOrder[b.team];
-    if (byTeam !== 0) return byTeam;
-    return a.agent_name.localeCompare(b.agent_name);
-  });
-
-  if (list.length === 0) return (
-    <div style={{ padding: '16px 14px', color: C.textSecondary, fontSize: 11, fontStyle: 'italic', textAlign: 'center' }}>
-      No agents connected
-    </div>
-  );
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto',
-      maxHeight: 'calc(100vh - 260px)', padding: '0 4px', scrollbarWidth: 'thin',
-      scrollbarColor: `rgba(255,255,255,0.08) transparent` }}>
-      {list.map(agent => {
-        const isSelected = agent.agent_id === selectedId;
-        const accent = teamColor(agent.team);
-        return (
-          <button
-            key={agent.agent_id}
-            onClick={() => onAgentClick(agent.agent_id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              background: isSelected ? `${agent.color}18` : 'rgba(255,255,255,0.025)',
-              border: `1px solid ${isSelected ? agent.color + '55' : C.border}`,
-              borderRadius: 9, padding: '8px 10px', cursor: 'pointer',
-              textAlign: 'left', transition: 'all 0.15s',
-            }}
-          >
-            {/* Color dot */}
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%',
-              background: `radial-gradient(circle at 35% 35%, ${agent.color}dd, ${agent.color}66)`,
-              boxShadow: `0 0 8px ${agent.color}55`,
-              flexShrink: 0,
-            }} />
-            <div style={{ flex: 1, overflow: 'hidden' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textPrimary,
-                letterSpacing: 0.6 }}>
-                {agent.agent_name}
-              </div>
-              <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 0.5, marginTop: 2, textTransform: 'capitalize' }}>
-                {agent.agent_role}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                <span style={{ fontSize: 9, color: accent, letterSpacing: 0.5, fontFamily: 'monospace' }}>
-                  {agent.team.toUpperCase()}
-                </span>
-                <span style={{ width: 4, height: 4, borderRadius: '50%',
-                  background: statusColor(agent.status), display: 'inline-block' }} />
-                <span style={{ fontSize: 9, color: statusColor(agent.status), letterSpacing: 0.3 }}>
-                  {agent.status}
-                </span>
-                {agent.team === 'orchestrator' && (
-                  <span style={{
-                    fontSize: 8,
-                    color: C.textGold,
-                    border: `1px solid ${C.borderGold}`,
-                    borderRadius: 999,
-                    padding: '1px 5px',
-                    letterSpacing: 0.8,
-                    fontFamily: 'monospace',
-                  }}>
-                    CROWN
-                  </span>
-                )}
-              </div>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-};
-
-// ─── Sub-component: Empty state ───────────────────────────────────────────────
-const EmptyState: React.FC<{ connected: boolean }> = ({ connected }) => {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setFrame(f => (f + 1) % 4), 500);
-    return () => clearInterval(id);
-  }, []);
-  const dots = '.'.repeat(frame + 1);
-
-  return (
-    <div style={{
-      position: 'fixed', top: '50%', left: '50%',
-      transform: 'translate(-50%, -50%)',
-      textAlign: 'center', pointerEvents: 'none', zIndex: 10,
-    }}>
-      <div style={{
-        width: 80, height: 80, borderRadius: '50%', margin: '0 auto 20px',
-        background: 'radial-gradient(circle, rgba(0,200,255,0.08), transparent)',
-        border: '1px solid rgba(0,200,255,0.15)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 36, color: 'rgba(0,200,255,0.3)',
-      }}>◎</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: 'rgba(255,255,255,0.3)', marginBottom: 8 }}>
-        {connected ? `Awaiting agents${dots}` : 'Connecting to IRIS backend'}
-      </div>
-      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.15)', fontFamily: 'monospace' }}>
-        {connected ? 'POST /tasks/dev to start' : (import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000/ws')}
-      </div>
-      {!connected && (
-        <div style={{ marginTop: 16, fontSize: 10, color: 'rgba(251,191,36,0.4)', fontFamily: 'monospace' }}>
-          Run IRIS.bat to start the backend
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ─── Root App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const { connected } = useEventStream();
+  const hydrateAgents = useOfficeStore((state) => state.hydrateAgents);
+  const agents = useOfficeStore((state) => state.agents);
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>('command');
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'office' | 'requests'>('office');
-  const agents = useOfficeStore(s => s.agents);
-  const hydrateAgents = useOfficeStore(s => s.hydrateAgents);
-  const agentArr = Object.values(agents);
-  const devAgents = agentArr.filter(a => a.team === 'dev');
-  const mktAgents = agentArr.filter(a => a.team === 'marketing');
-  const orchestratorAgents = agentArr.filter(a => a.team === 'orchestrator');
-  const devWorking = devAgents.filter(a => a.status === 'working').length;
-  const mktWorking = mktAgents.filter(a => a.status === 'working').length;
-  const orchestratorWorking = orchestratorAgents.filter(a => a.status === 'working' || a.status === 'thinking').length;
-  const agentCount = agentArr.length;
 
-  const handleAgentClick = useCallback((id: string) => {
-    setSelectedAgentId(p => p === id ? null : id);
-  }, []);
+  const {
+    tasks,
+    loading,
+    error,
+    selectedLogs,
+    logsLoading,
+    health,
+  } = useOperationsData(API_URL, selectedRequestId);
 
-  const handleClosePanel = useCallback(() => setSelectedAgentId(null), []);
-  const handleTabChange = useCallback((tab: 'office' | 'requests') => {
-    setActiveTab(tab);
-    if (tab !== 'office') {
-      setSelectedAgentId(null);
-    }
-  }, []);
+  const agentArr = useMemo(() => Object.values(agents), [agents]);
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.requestId === selectedRequestId) ?? tasks[0] ?? null,
+    [selectedRequestId, tasks],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -321,218 +48,108 @@ export default function App() {
           throw new Error(`Failed to fetch agents: ${response.status}`);
         }
 
-        const records = await response.json() as Array<{
-          agent_id: string;
-          role: string;
-          team: 'dev' | 'marketing' | 'orchestrator';
-          status: 'idle' | 'thinking' | 'working' | 'moving';
-          current_task_id: string | null;
-          completed_tasks: number;
-          error_count?: number;
-          position?: { x: number; y: number };
-        }>;
-
+        const records = (await response.json()) as AgentBootstrapRecord[];
         if (!cancelled) {
           startTransition(() => hydrateAgents(records));
         }
-      } catch (error) {
-        console.warn('[App] Failed to bootstrap /agents', error);
+      } catch (err) {
+        console.warn('[App] Failed to bootstrap /agents', err);
       }
     }
 
     bootstrapAgents();
+    const intervalId = window.setInterval(bootstrapAgents, 10000);
+
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [hydrateAgents]);
 
-  // Scale canvas to fit viewport
-  const [scale, setScale] = useState(1);
-  const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    function resize() {
-      const vw = window.innerWidth  - (agentCount > 0 ? 260 : 0);
-      const vh = window.innerHeight - 52; // minus top bar
-      const CANVAS_W = 1440, CANVAS_H = 810;
-      const s = Math.min(vw / CANVAS_W, vh / CANVAS_H, 1);
-      setScale(s);
+    if (!selectedRequestId && tasks.length > 0) {
+      setSelectedRequestId(tasks[0].requestId);
     }
-    resize();
-    window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
-  }, [agentCount]);
+  }, [selectedRequestId, tasks]);
+
+  function selectTab(tab: ActiveTab) {
+    setActiveTab(tab);
+    if (tab !== 'agents') {
+      setSelectedAgentId(null);
+    }
+  }
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: C.bg,
-      display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-      {/* ── TOP HUD BAR ──────────────────────────────────────────────────── */}
-      <div style={{
-        height: 52, flexShrink: 0,
-        background: 'rgba(3, 3, 10, 0.9)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        borderBottom: `1px solid ${C.border}`,
-        display: 'flex', alignItems: 'center', gap: 14,
-        padding: '0 18px', zIndex: 50,
-      }}>
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 16, fontWeight: 900, color: '#000', fontFamily: 'monospace',
-            boxShadow: '0 0 14px rgba(251,191,36,0.35)',
-          }}>◈</div>
+    <div className="product-shell">
+      <header className="product-topbar">
+        <div className="product-brand">
+          <div className="product-brand__mark">IR</div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: C.textPrimary, letterSpacing: 0.5, lineHeight: 1 }}>
-              IRIS
-            </div>
-            <div style={{ fontSize: 8, color: C.textGold, letterSpacing: 2, lineHeight: 1, marginTop: 2 }}>
-              AI OFFICE SYSTEM
-            </div>
+            <span>IRIS AI Office System</span>
+            <strong>Operational command center</strong>
           </div>
         </div>
 
-        <div style={{ width: 1, height: 30, background: C.border, flexShrink: 0 }} />
-
-        {/* Connection */}
-        <ConnectionDot connected={connected} />
-
-        <div style={{ width: 1, height: 30, background: C.border, flexShrink: 0 }} />
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <nav className="product-nav" aria-label="Navegação principal">
           {[
-            { id: 'office' as const, label: 'Office' },
-            { id: 'requests' as const, label: 'Solicitacoes' },
-          ].map(tab => {
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => handleTabChange(tab.id)}
-                style={{
-                  border: `1px solid ${active ? C.borderGold : C.border}`,
-                  background: active ? 'rgba(251,191,36,0.12)' : 'rgba(255,255,255,0.03)',
-                  color: active ? C.textGold : C.textSecondary,
-                  borderRadius: 999,
-                  padding: '7px 12px',
-                  fontSize: 10,
-                  letterSpacing: 1.1,
-                  textTransform: 'uppercase',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
+            { id: 'command' as const, label: 'Command Center' },
+            { id: 'intake' as const, label: 'Intake' },
+            { id: 'agents' as const, label: 'Agent Ops' },
+          ].map((tab) => (
+            <button
+              className={activeTab === tab.id ? 'product-nav__item product-nav__item--active' : 'product-nav__item'}
+              key={tab.id}
+              onClick={() => selectTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className={`topbar-status ${connected ? 'topbar-status--online' : 'topbar-status--offline'}`}>
+          <span />
+          {connected ? 'WS online' : 'WS offline'}
         </div>
+      </header>
 
-        <div style={{ width: 1, height: 30, background: C.border, flexShrink: 0 }} />
+      {activeTab === 'command' && (
+        <CommandCenter
+          connected={connected}
+          agents={agentArr}
+          tasks={tasks}
+          loading={loading}
+          error={error}
+          selectedTask={selectedTask}
+          selectedLogs={selectedLogs}
+          logsLoading={logsLoading}
+          health={health}
+          selectedAgentId={selectedAgentId}
+          onSelectTask={setSelectedRequestId}
+          onSelectAgent={setSelectedAgentId}
+          ActivityFeed={ActivityFeed}
+        />
+      )}
 
-        {/* Team chips */}
-        <TeamChip label="DEV" count={devAgents.length} working={devWorking}
-          color={C.textDev} border={C.borderDev} />
-        <TeamChip label="MKT" count={mktAgents.length} working={mktWorking}
-          color={C.textMkt} border={C.borderMkt} />
-        <TeamChip label="ORCH" count={orchestratorAgents.length} working={orchestratorWorking}
-          color={C.textGold} border={C.borderGold} />
-
-        <div style={{ flex: 1 }} />
-
-        {/* Task stats */}
-        <TaskBar />
-
-        <div style={{ width: 1, height: 30, background: C.border, flexShrink: 0 }} />
-
-        {/* Scale indicator */}
-        <span style={{ fontSize: 10, color: C.textSecondary, fontFamily: 'monospace', flexShrink: 0 }}>
-          {agentCount} agent{agentCount !== 1 ? 's' : ''}
-        </span>
-      </div>
-
-      {/* ── MAIN AREA ────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-
-        {activeTab === 'office' ? (
-          <>
-            {/* Canvas area */}
-            <div style={{
-              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: C.bg, position: 'relative', overflow: 'hidden',
-            }}>
-              {/* Vignette overlay */}
-              <div style={{
-                position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1,
-                background: 'radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(3,3,10,0.6) 100%)',
-              }} />
-
-              <div ref={containerRef} style={{
-                transform: `scale(${scale})`, transformOrigin: 'center center',
-                lineHeight: 0, position: 'relative',
-              }}>
-                <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading office renderer...</div>}>
-                  <OfficeLayout onAgentClick={handleAgentClick} />
-                </Suspense>
-              </div>
-
-              {/* Empty state */}
-              {agentCount === 0 && <EmptyState connected={connected} />}
-            </div>
-
-            {/* ── RIGHT SIDEBAR ─────────────────────────────────────────────── */}
-            {agentCount > 0 && (
-              <div style={{
-                width: 252, flexShrink: 0,
-                background: 'rgba(5, 5, 14, 0.92)',
-                backdropFilter: 'blur(16px)',
-                WebkitBackdropFilter: 'blur(16px)',
-                borderLeft: `1px solid ${C.border}`,
-                display: 'flex', flexDirection: 'column',
-                overflow: 'hidden',
-              }}>
-                {/* Agents section */}
-                <div style={{
-                  padding: '14px 14px 10px',
-                  borderBottom: `1px solid ${C.border}`,
-                }}>
-                  <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 2,
-                    textTransform: 'uppercase', marginBottom: 10 }}>
-                    Active Agents
-                  </div>
-                  <AgentRoster onAgentClick={handleAgentClick} selectedId={selectedAgentId} />
-                </div>
-
-                {/* Activity Feed */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <div style={{ padding: '10px 14px 6px',
-                    borderBottom: `1px solid ${C.border}` }}>
-                    <div style={{ fontSize: 9, color: C.textSecondary, letterSpacing: 2, textTransform: 'uppercase' }}>
-                      Event Stream
-                    </div>
-                  </div>
-                  <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading event stream...</div>}>
-                    <ActivityFeed />
-                  </Suspense>
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
-          <Suspense fallback={<div style={PANEL_FALLBACK_STYLE}>Loading request desk...</div>}>
+      {activeTab === 'intake' && (
+        <section className="module-frame">
+          <Suspense fallback={panelFallback}>
             <RequestDesk apiUrl={API_URL} />
           </Suspense>
-        )}
-      </div>
+        </section>
+      )}
 
-      {/* ── AGENT DETAIL PANEL (floating) ────────────────────────────────── */}
-      {activeTab === 'office' && selectedAgentId && (
-        <Suspense fallback={null}>
-          <AgentPanel agentId={selectedAgentId} onClose={handleClosePanel} />
-        </Suspense>
+      {activeTab === 'agents' && (
+        <AgentOperations
+          apiUrl={API_URL}
+          agents={agentArr}
+          tasks={tasks}
+          selectedTask={selectedTask}
+          selectedLogs={selectedLogs}
+          logsLoading={logsLoading}
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={setSelectedAgentId}
+          onSelectTask={setSelectedRequestId}
+        />
       )}
     </div>
   );

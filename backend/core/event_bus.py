@@ -1,19 +1,19 @@
 """
-AI Office System — Event Bus
-Redis Streams como backbone de eventos.
-Producers emitem → Consumers reagem (WebSocket → Frontend).
+AI Office System - Event Bus
+Redis Streams backbone for operational events.
 
-Fallback automático: se Redis real não estiver disponível, usa fakeredis
-(in-memory) para que o sistema rode sem dependência externa durante dev/test.
+fakeredis is allowed only as an explicit local-development fallback. Health checks
+must report it as degraded because events are not durable across restarts.
 """
 import asyncio
 import json
 import logging
 from typing import AsyncIterator, Callable, Optional
+
 import redis.asyncio as aioredis
 
 from backend.config.settings import settings
-from backend.core.event_types import OfficialEvent, EventType
+from backend.core.event_types import OfficialEvent
 from backend.core.runtime_registry import apply_event_to_registry
 
 logger = logging.getLogger(__name__)
@@ -24,19 +24,28 @@ WEBSOCKET_CONSUMER = "websocket_bridge"
 
 
 class EventBus:
-    """
-    Event Bus baseado em Redis Streams.
-    Fallback automático para fakeredis quando Redis real offline.
-    """
+    """Redis Streams EventBus with explicit degraded local fallback."""
 
     def __init__(self, redis_url: str = settings.REDIS_URL):
         self.redis_url = redis_url
         self._redis: Optional[aioredis.Redis] = None
         self._subscribers: list[Callable] = []
         self._using_fake = False
+        self._mode = "disconnected"
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def is_persistent(self) -> bool:
+        return self._mode == "redis"
+
+    @property
+    def is_available(self) -> bool:
+        return self._redis is not None
 
     async def connect(self):
-        # 1. Tenta Redis real
         try:
             client = await aioredis.from_url(
                 self.redis_url,
@@ -47,32 +56,49 @@ class EventBus:
             await client.ping()
             self._redis = client
             self._using_fake = False
-            logger.info("EventBus conectado ao Redis real (%s)", self.redis_url)
+            self._mode = "redis"
+            logger.info("EventBus connected to real Redis (%s)", self.redis_url)
         except Exception as exc:
-            logger.warning("Redis real indisponivel (%s) — usando fakeredis in-memory.", exc)
-            # 2. Fallback: fakeredis
+            logger.warning("Real Redis unavailable (%s).", exc)
+            if not settings.EVENTBUS_ALLOW_FAKE_REDIS:
+                self._redis = None
+                self._using_fake = False
+                self._mode = "offline"
+                raise RuntimeError(
+                    "Real Redis unavailable and EVENTBUS_ALLOW_FAKE_REDIS=false. "
+                    "Start Redis or enable fallback only for development."
+                ) from exc
+
             try:
                 import fakeredis.aioredis as fakeredis_aio  # type: ignore
+
                 self._redis = fakeredis_aio.FakeRedis(
                     encoding="utf-8", decode_responses=True
                 )
                 self._using_fake = True
-                logger.info("EventBus usando fakeredis (in-memory, sem persistencia).")
+                self._mode = "fakeredis"
+                logger.warning("EventBus using fakeredis: in-memory, not persistent.")
             except ImportError:
                 logger.error(
-                    "fakeredis nao instalado. Execute: pip install fakeredis[aioredis]\n"
-                    "EventBus rodara sem persistencia (somente pub/sub in-process)."
+                    "fakeredis is not installed. Install fakeredis[aioredis] or start Redis."
                 )
                 self._redis = None
+                self._using_fake = False
+                self._mode = "offline"
                 return
+
         await self._ensure_consumer_group()
-        logger.info("EventBus pronto. fake=%s", self._using_fake)
+        logger.info("EventBus ready. mode=%s persistent=%s", self._mode, self.is_persistent)
 
     async def disconnect(self):
         if self._redis:
             await self._redis.aclose()
+        self._redis = None
+        self._mode = "disconnected"
 
     async def _ensure_consumer_group(self):
+        if not self._redis:
+            return
         try:
             await self._redis.xgroup_create(
                 STREAM_KEY, CONSUMER_GROUP, id="0", mkstream=True
@@ -82,31 +108,30 @@ class EventBus:
                 raise
 
     async def emit(self, event: OfficialEvent) -> str:
-        """Emite evento no stream. Retorna o ID gerado pelo Redis."""
+        """Emit an event to the stream and notify in-process subscribers."""
         event_data = event.to_dict()
         apply_event_to_registry(event_data)
 
-        # Notifica subscribers in-process (para WebSocket bridge) — sempre
         for callback in self._subscribers:
             asyncio.create_task(callback(event_data))
 
         if not self._redis:
-            logger.debug("[EventBus] Sem Redis — evento entregue apenas in-process.")
+            logger.debug("[EventBus] No Redis; event delivered in-process only.")
             return "0-0"
 
         msg_id = await self._redis.xadd(STREAM_KEY, {"data": json.dumps(event_data)})
-        logger.debug(f"[EventBus] Emitido {event.event_type.value} | id={msg_id}")
+        logger.debug("[EventBus] Emitted %s | id=%s", event.event_type.value, msg_id)
         return msg_id
 
     def subscribe(self, callback: Callable):
-        """Registra callback para receber eventos em tempo real (in-process)."""
+        """Register an in-process realtime subscriber."""
         self._subscribers.append(callback)
 
     def unsubscribe(self, callback: Callable):
         self._subscribers.remove(callback)
 
     async def read_pending(self, count: int = 100) -> list[dict]:
-        """Lê eventos pendentes (não confirmados) do consumer group."""
+        """Read new events from the consumer group."""
         if not self._redis:
             return []
 
@@ -119,7 +144,7 @@ class EventBus:
                 block=0,
             )
         except Exception as exc:
-            logger.warning("[EventBus] read_pending falhou: %s", exc)
+            logger.warning("[EventBus] read_pending failed: %s", exc)
             return []
 
         events = []
@@ -132,14 +157,13 @@ class EventBus:
         return events
 
     async def ack(self, msg_id: str):
-        """Confirma processamento de mensagem."""
+        """Acknowledge a processed stream message."""
+        if not self._redis:
+            return
         await self._redis.xack(STREAM_KEY, CONSUMER_GROUP, msg_id)
 
     async def stream_events(self) -> AsyncIterator[dict]:
-        """
-        Generator assíncrono — itera eventos em tempo real.
-        Usado pelo WebSocket bridge.
-        """
+        """Async generator used by the WebSocket bridge."""
         while True:
             events = await self.read_pending(count=10)
             for event in events:
@@ -147,19 +171,19 @@ class EventBus:
                 await self.ack(event["_redis_id"])
 
             if not events:
-                await asyncio.sleep(0.05)  # 50ms polling — leve e responsivo
+                await asyncio.sleep(0.05)
 
     async def get_history(self, count: int = 500) -> list[dict]:
-        """Retorna histórico de eventos para replay no frontend ao conectar."""
+        """Return recent events for frontend replay on reconnect."""
         if not self._redis:
             return []
         try:
             messages = await self._redis.xrange(STREAM_KEY, count=count)
             return [json.loads(data["data"]) for _, data in messages]
         except Exception as exc:
-            logger.warning("[EventBus] get_history falhou: %s", exc)
+            logger.warning("[EventBus] get_history failed: %s", exc)
             return []
 
 
-# Instância global — injetada nos agentes e WebSocket
+# Global instance injected into agents and WebSocket code.
 event_bus = EventBus(settings.REDIS_URL)
