@@ -22,6 +22,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HT
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.event_bus import event_bus
+from backend.core.delivery_audit import get_task_delivery_audit, list_delivery_audits
 from backend.core.execution_trace import (
     append_execution_log,
     get_execution_log,
@@ -54,6 +55,8 @@ from backend.api.schemas import (
     AgentCapabilities,
     AgentPersonalityConfig,
     AgentPersonalityUpdate,
+    DeliveryAuditListResponse,
+    DeliveryAuditTaskResponse,
 )
 from backend.api.websocket import websocket_endpoint
 
@@ -500,6 +503,24 @@ async def get_task_delivery_manifests(task_id: str):
             items[file_path.stem] = {"error": str(exc), "manifest_path": str(file_path)}
 
     return {"task_id": task_id, "items": items, "total": len(items)}
+
+
+@app.get("/delivery-audit", response_model=DeliveryAuditListResponse)
+async def list_delivery_audit_endpoint(
+    limit: int = 50,
+    approved: bool | None = None,
+):
+    """Lista auditoria executiva das entregas verificadas por manifestos."""
+    return list_delivery_audits(limit=limit, approved=approved)
+
+
+@app.get("/delivery-audit/{task_id}", response_model=DeliveryAuditTaskResponse)
+async def get_delivery_audit_endpoint(task_id: str):
+    """Retorna auditoria completa de entrega para uma tarefa específica."""
+    try:
+        return get_task_delivery_audit(task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' não encontrada.")
 
 
 @app.post("/service-requests", response_model=ServiceRequestResponse, status_code=202)

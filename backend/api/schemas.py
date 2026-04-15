@@ -2,7 +2,7 @@
 AI Office System — API Schemas
 Pydantic models para request/response da API REST e WebSocket.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -77,6 +77,47 @@ class SystemHealth(BaseModel):
 class EventHistoryResponse(BaseModel):
     events: list[dict]
     total: int
+
+
+class DeliveryAuditItem(BaseModel):
+    task_id: str
+    subtask_id: str
+    agent_id: str
+    agent_role: str
+    team: str
+    approved: bool
+    feedback: str
+    created_at: str
+    manifest_path: str
+    failed_stages: list[str]
+    stage_count: int
+    functional_ready: bool
+    functional_message: str = ""
+    commit_sha: str = ""
+    commit_message: str = ""
+    repo_path: str = ""
+    files_changed: list[str] = Field(default_factory=list)
+    pushed: Optional[bool] = None
+    stages: list[dict] = Field(default_factory=list)
+
+
+class DeliveryAuditListResponse(BaseModel):
+    total: int
+    returned: int
+    approved: int
+    failed: int
+    functional_ready: int
+    items: list[DeliveryAuditItem]
+
+
+class DeliveryAuditTaskResponse(BaseModel):
+    task_id: str
+    total: int
+    approved: int
+    failed: int
+    functional_ready: int
+    commits: list[dict]
+    items: list[DeliveryAuditItem]
 
 
 class ServiceRequestCreate(BaseModel):
