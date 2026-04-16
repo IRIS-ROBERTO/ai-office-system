@@ -36,13 +36,19 @@ Decision: do not replace PicoClaw directly. Build a runtime adapter first and ev
 ## Recommended Architecture
 
 1. Keep PicoClaw as production MCP gateway.
-2. Add `AgentRuntimeGateway` abstraction with providers: `picoclaw`, `hermes`, `memos`.
+2. Use the new `AgentRuntimeGateway` abstraction with providers: `picoclaw`, `hermes`, `memos`.
 3. Integrate a governed memory layer before enabling self-improving behavior.
 4. Add memory classes: project memory, agent skill memory, failure memory, decision memory and user preference memory.
 5. Add safety gates: no secrets in memory, TTL by class, review/delete support and source attribution for recalled memory.
 6. Add browser automation to QA behind policy, not direct ungoverned access.
 7. Add SAST/dependency audit to AEGIS.
 8. Add knowledge graph/search over `AIteams` projects for reuse across deliveries.
+
+## Implemented Next Step
+
+- Added `/integrations/runtime-gateway` to expose provider readiness and fallback decisions.
+- Added env-driven provider settings: `AGENT_RUNTIME_PROVIDER`, `HERMES_ENABLED`, `HERMES_HOST`, `MEMOS_ENABLED`, `MEMOS_HOST`.
+- Production behavior remains safe: if Hermes or MemOS are configured but not approved/online, IRIS falls back to PicoClaw.
 
 ## External References
 

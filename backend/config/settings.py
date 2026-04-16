@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     PICOCLAW_ENABLED: bool = True
     PICOCLAW_REQUIRED: bool = False
 
+    AGENT_RUNTIME_PROVIDER: str = "picoclaw"
+    HERMES_ENABLED: bool = False
+    HERMES_REQUIRED: bool = False
+    HERMES_HOST: str = "http://127.0.0.1:8765"
+    HERMES_WSL_DISTRO: str = ""
+    MEMOS_ENABLED: bool = False
+    MEMOS_REQUIRED: bool = False
+    MEMOS_HOST: str = "http://127.0.0.1:8090"
+
     MAX_CONCURRENT_AGENTS: int = 2
     SENIOR_MAX_TOKENS: int = 2048
     LOCAL_MAX_TOKENS: int = 2048

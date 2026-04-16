@@ -141,6 +141,6 @@ def build_agent_capability_matrix() -> dict[str, Any]:
         "total_agents": total,
         "mcp_policy_coverage": f"{mcp_enabled}/{total}",
         "memory_strategy": "PicoClaw memory MCP now covers every canonical role by policy; CrewAI memory remains disabled to avoid uncontrolled context bloat.",
-        "runtime_recommendation": "Keep PicoClaw as production MCP bridge; evaluate Hermes Agent behind a pluggable runtime adapter before replacement.",
+        "runtime_recommendation": "Keep PicoClaw as production MCP bridge; evaluate Hermes Agent and MemOS through /integrations/runtime-gateway before replacement.",
         "items": items,
     }

@@ -77,6 +77,7 @@ class SystemHealth(BaseModel):
     brain_router: dict
     model_gate: dict
     picoclaw: dict
+    runtime_gateway: dict = Field(default_factory=dict)
     active_tasks: int
 
 

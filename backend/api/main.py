@@ -35,6 +35,7 @@ from backend.core.improvement_loop import improvement_loop
 from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_handoff
 from backend.core.agent_personality import get_agent_config, update_agent_config
 from backend.core.agent_capability_matrix import build_agent_capability, build_agent_capability_matrix
+from backend.core.agent_runtime_gateway import get_runtime_gateway_status
 from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
 from backend.config.settings import settings
@@ -703,6 +704,7 @@ async def health_check():
         brain_router=get_brain_status(),
         model_gate=gate.get_usage_summary(),
         picoclaw=await check_picoclaw_health(),
+        runtime_gateway=await get_runtime_gateway_status(),
         active_tasks=active_tasks_count,
     )
 
@@ -727,6 +729,12 @@ async def get_picoclaw_integration_status():
         "config": get_picoclaw_status(),
         "policy": list_tool_policies(),
     }
+
+
+@app.get("/integrations/runtime-gateway")
+async def get_agent_runtime_gateway():
+    """Retorna provedores de runtime avaliados e a decisão operacional ativa."""
+    return await get_runtime_gateway_status()
 
 
 @app.get("/production-readiness", response_model=ProductionReadinessResponse)
