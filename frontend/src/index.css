@@ -1327,12 +1327,13 @@ button {
 
 .office-shell {
   position: relative;
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 .office-shell__glow {
