@@ -33,8 +33,14 @@ class AgentCapabilities(BaseModel):
     agent_id: str
     role: str
     team: str
+    autonomy: str = ""
+    segmentation: str = ""
+    declared_tools: list[str] = Field(default_factory=list)
+    memory_posture: str = ""
     tool_policy: dict
+    brain_profile: dict = Field(default_factory=dict)
     picoclaw: dict
+    upgrade_track: list[str] = Field(default_factory=list)
 
 
 class AgentPersonalityConfig(BaseModel):

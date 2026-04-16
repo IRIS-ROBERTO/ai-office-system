@@ -15,6 +15,7 @@ from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
 from backend.tools.search_tools import web_search_tool
 from backend.tools.workspace_tool import workspace_file_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 
 _file_read_tool = FileReadTool()
@@ -87,8 +88,7 @@ def create_security_agent() -> Agent:
 
     LLM: qwen3-vl:8b via Ollama — raciocínio profundo necessário para análise
          de fluxos de ataque complexos, threat modeling e STRIDE.
-    Tools: workspace_file_tool + github_commit_tool — lê, corrige e commita
-           apenas no repositório local com paths controlados.
+    Tools: workspace_file_tool, github_commit_tool, web_search_tool e PicoClaw MCP governado.
     """
     llm = get_crewai_llm_for_agent("security", AGENT_ID)
 
@@ -110,13 +110,19 @@ def create_security_agent() -> Agent:
             "dados, XXE, misconfiguração, XSS, deserialização insegura e dependências com "
             "CVEs ativos. Para cada finding entrego: severidade (CVSS 3.1 base score), "
             "vetor de ataque, prova de conceito funcional e remediação com código corrigido. "
-            "Tenho uma regra inegociável: não trabalho com ferramentas externas durante "
-            "auditoria — código sensível não vai para APIs de terceiros. Minha análise é "
-            "puramente cognitiva, o que me obriga a ser ainda mais metódico. Cada linha "
-            "de código que aprovo é uma linha que eu assinaria com meu nome."
+            "Tenho uma regra inegociável: código sensível não vai para APIs de terceiros. "
+            "Uso apenas ferramentas governadas para memória operacional, leitura local e "
+            "pesquisa pública; escrita externa depende do orquestrador. Cada linha de "
+            "código que aprovo é uma linha que eu assinaria com meu nome."
         ),
         llm=llm,
-        tools=[workspace_file_tool, github_commit_tool, _file_read_tool, web_search_tool],
+        tools=[
+            workspace_file_tool,
+            github_commit_tool,
+            _file_read_tool,
+            web_search_tool,
+            get_picoclaw_mcp_tool("security", AGENT_ID),
+        ],
         verbose=False,
         allow_delegation=False,
         max_iter=10,

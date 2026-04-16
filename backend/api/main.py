@@ -34,6 +34,7 @@ from backend.core.runtime_registry import agent_registry, seed_agent_registry
 from backend.core.improvement_loop import improvement_loop
 from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_handoff
 from backend.core.agent_personality import get_agent_config, update_agent_config
+from backend.core.agent_capability_matrix import build_agent_capability, build_agent_capability_matrix
 from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
 from backend.config.settings import settings
@@ -646,19 +647,16 @@ async def patch_agent_personality_config(agent_id: str, body: AgentPersonalityUp
 @app.get("/agents/{agent_id}/capabilities", response_model=AgentCapabilities)
 async def get_agent_capabilities(agent_id: str):
     """Retorna as ferramentas e MCPs liberados para o papel do agente."""
-    seed_agent_registry()
-    agent = agent_registry.get(agent_id)
-    if agent is None:
+    try:
+        return AgentCapabilities(**build_agent_capability(agent_id))
+    except KeyError:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
 
-    role = str(agent["agent_role"])
-    return AgentCapabilities(
-        agent_id=agent_id,
-        role=role,
-        team=str(agent["team"]),
-        tool_policy=get_role_tool_policy(role),
-        picoclaw=get_picoclaw_status(),
-    )
+
+@app.get("/agents/capabilities/matrix")
+async def get_agent_capabilities_matrix():
+    """Retorna matriz auditavel de autonomia, segmentacao, tools, memoria e MCPs."""
+    return build_agent_capability_matrix()
 
 
 # ---------------------------------------------------------------------------

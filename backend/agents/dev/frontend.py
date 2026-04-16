@@ -12,6 +12,7 @@ from crewai import Agent
 from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
 from backend.tools.workspace_tool import workspace_file_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 
 from backend.core.event_bus import event_bus
@@ -74,7 +75,7 @@ def create_frontend_agent() -> Agent:
 
     LLM: Qwen 2.5 Coder via Ollama (get_code_llm) — melhor modelo local
          para geração de código TypeScript/React de alta precisão.
-    Tools: github_commit_tool — commita componentes e páginas no repositório.
+    Tools: workspace_file_tool, github_commit_tool e PicoClaw MCP governado.
     """
     llm = get_crewai_llm_for_agent("frontend", AGENT_ID)
 
@@ -101,7 +102,7 @@ def create_frontend_agent() -> Agent:
             "discutir agora do que refatorar depois que o usuário reclamar."
         ),
         llm=llm,
-        tools=[workspace_file_tool, github_commit_tool],
+        tools=[workspace_file_tool, github_commit_tool, get_picoclaw_mcp_tool("frontend", AGENT_ID)],
         verbose=False,
         allow_delegation=False,
         max_iter=8,

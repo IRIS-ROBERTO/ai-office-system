@@ -15,6 +15,7 @@ from backend.tools.ollama_tool import get_crewai_llm_for_agent
 from backend.tools.github_tool import github_commit_tool
 from backend.tools.code_executor_tool import code_executor_tool
 from backend.tools.workspace_tool import workspace_file_tool
+from backend.tools.picoclaw_tool import get_picoclaw_mcp_tool
 from backend.core.event_types import AgentRole, TeamType, EventType, OfficialEvent
 
 _file_read_tool = FileReadTool()
@@ -88,7 +89,7 @@ def create_qa_agent() -> Agent:
 
     LLM: qwen3-vl:8b via Ollama — raciocínio profundo essencial para identificar
          edge cases não óbvios, race conditions e gerar cenários de teste abrangentes.
-    Tools: github_commit_tool — commita suites de teste e relatórios de bugs.
+    Tools: workspace_file_tool, github_commit_tool, code_executor_tool e PicoClaw MCP governado.
     """
     llm = get_crewai_llm_for_agent("qa", AGENT_ID)
 
@@ -114,7 +115,14 @@ def create_qa_agent() -> Agent:
             "não conseguir dormir tranquilo após revisar o código, ele não vai para produção."
         ),
         llm=llm,
-        tools=[workspace_file_tool, github_commit_tool, _file_read_tool, _dir_read_tool, code_executor_tool],
+        tools=[
+            workspace_file_tool,
+            github_commit_tool,
+            _file_read_tool,
+            _dir_read_tool,
+            code_executor_tool,
+            get_picoclaw_mcp_tool("qa", AGENT_ID),
+        ],
         verbose=False,
         allow_delegation=False,
         max_iter=12,
