@@ -761,6 +761,7 @@ async def search_memory(
             agent_role=agent_role,
             limit=limit,
         ),
+        "external_items": memory_gateway.search_external(query=query, limit=limit),
     }
 
 

@@ -15,6 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from backend.config.settings import settings
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MEMORY_ROOT = _ROOT / ".runtime" / "memory-gateway"
@@ -94,11 +98,13 @@ class MemoryGateway:
             "by_class": by_class,
             "by_role": by_role,
             "memory_classes": sorted(MEMORY_CLASSES),
+            "external_provider": self.external_provider_status(),
             "governance": {
                 "secret_screening": True,
                 "append_only": True,
                 "approval_required_for_agent_writes": True,
-                "external_provider": "not_configured",
+                "external_provider": "memos" if settings.MEMOS_ENABLED else "not_configured",
+                "external_sync_enabled": bool(settings.MEMORY_EXTERNAL_SYNC_ENABLED),
             },
         }
 
@@ -153,6 +159,10 @@ class MemoryGateway:
         )
         if self._exists(record.id):
             return MemoryWriteResult(False, "memoria duplicada", record)
+        external_sync = self._sync_to_memos(record)
+        record.metadata["external_sync"] = external_sync
+        if external_sync.get("status") == "required_failed":
+            return MemoryWriteResult(False, "provedor externo de memoria requerido indisponivel", record)
         self._append(record)
         return MemoryWriteResult(True, "memoria armazenada", record)
 
@@ -260,10 +270,118 @@ class MemoryGateway:
             for score, record in scored[: max(1, min(limit, 50))]
         ]
 
+    def search_external(self, *, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        if not settings.MEMOS_ENABLED:
+            return []
+        clean_query = _normalize_content(query)
+        if not clean_query:
+            return []
+
+        payload = {
+            "query": clean_query,
+            "user_id": settings.MEMOS_USER_ID,
+            "mem_cube_id": settings.MEMOS_MEM_CUBE_ID,
+            "install_cube": False,
+            "top_k": max(1, min(limit, 50)),
+        }
+        try:
+            response = httpx.post(
+                f"{_memos_host()}/product/search",
+                json=payload,
+                timeout=4.0,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except Exception:
+            return []
+
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict):
+            return []
+        items: list[dict[str, Any]] = []
+        for bucket_name in ("text_mem", "act_mem", "para_mem"):
+            bucket = data.get(bucket_name) or []
+            if not isinstance(bucket, list):
+                continue
+            for cube in bucket:
+                memories = cube.get("memories") if isinstance(cube, dict) else None
+                if not isinstance(memories, list):
+                    continue
+                for memory in memories:
+                    if isinstance(memory, dict):
+                        items.append({"provider": "memos", "type": bucket_name, "item": memory})
+                    if len(items) >= max(1, min(limit, 50)):
+                        return items
+        return items
+
+    def external_provider_status(self) -> dict[str, Any]:
+        base = {
+            "provider": "memos",
+            "enabled": bool(settings.MEMOS_ENABLED),
+            "required": bool(settings.MEMOS_REQUIRED),
+            "sync_enabled": bool(settings.MEMORY_EXTERNAL_SYNC_ENABLED),
+            "host": _memos_host(),
+            "user_id": settings.MEMOS_USER_ID,
+            "mem_cube_id": settings.MEMOS_MEM_CUBE_ID,
+        }
+        if not settings.MEMOS_ENABLED:
+            return {**base, "status": "disabled", "reason": "MEMOS_ENABLED=false"}
+        try:
+            response = httpx.get(f"{_memos_host()}/openapi.json", timeout=3.0)
+            if response.status_code < 500:
+                return {**base, "status": "online", "http_status": response.status_code}
+            return {**base, "status": "degraded", "http_status": response.status_code}
+        except Exception as exc:
+            return {**base, "status": "offline", "error": str(exc)}
+
     def _append(self, record: MemoryRecord) -> None:
         _MEMORY_ROOT.mkdir(parents=True, exist_ok=True)
         with _MEMORY_FILE.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record.to_dict(), ensure_ascii=True) + "\n")
+
+    def _sync_to_memos(self, record: MemoryRecord) -> dict[str, Any]:
+        if not settings.MEMOS_ENABLED:
+            return {"provider": "memos", "status": "disabled", "reason": "MEMOS_ENABLED=false"}
+        if not settings.MEMORY_EXTERNAL_SYNC_ENABLED:
+            return {"provider": "memos", "status": "skipped", "reason": "MEMORY_EXTERNAL_SYNC_ENABLED=false"}
+
+        payload = {
+            "user_id": settings.MEMOS_USER_ID,
+            "mem_cube_id": settings.MEMOS_MEM_CUBE_ID,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"[{record.memory_class}] {record.content}",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Memory accepted by IRIS MemoryGateway governance.",
+                },
+            ],
+            "memory_content": "",
+            "doc_path": "",
+            "source": record.source,
+            "user_profile": False,
+        }
+        try:
+            response = httpx.post(
+                f"{_memos_host()}/product/add",
+                json=payload,
+                timeout=4.0,
+            )
+            response.raise_for_status()
+            return {
+                "provider": "memos",
+                "status": "synced",
+                "http_status": response.status_code,
+            }
+        except Exception as exc:
+            status = "required_failed" if settings.MEMOS_REQUIRED else "failed_non_blocking"
+            return {
+                "provider": "memos",
+                "status": status,
+                "error": str(exc),
+            }
 
     def _exists(self, memory_id: str) -> bool:
         return any(record.id == memory_id for record in self._read_all())
@@ -286,6 +404,10 @@ class MemoryGateway:
 def _memory_id(memory_class: str, content: str, source_id: str, task_id: str, subtask_id: str) -> str:
     raw = "\n".join([memory_class, content, source_id, task_id, subtask_id])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _memos_host() -> str:
+    return settings.MEMOS_HOST.rstrip("/")
 
 
 def _normalize_content(content: str) -> str:

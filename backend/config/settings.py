@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     MEMOS_ENABLED: bool = False
     MEMOS_REQUIRED: bool = False
     MEMOS_HOST: str = "http://127.0.0.1:8090"
+    MEMOS_USER_ID: str = "iris-office"
+    MEMOS_MEM_CUBE_ID: str = "iris-agent-memory"
+    MEMORY_EXTERNAL_SYNC_ENABLED: bool = True
 
     MAX_CONCURRENT_AGENTS: int = 2
     SENIOR_MAX_TOKENS: int = 2048
