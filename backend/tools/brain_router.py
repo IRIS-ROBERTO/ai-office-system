@@ -225,6 +225,11 @@ ROLE_PROFILES: dict[str, BrainProfile] = {
 
 _catalog_cache: dict[str, Any] = {"expires_at": 0.0, "models": {}}
 _selection_log: list[BrainSelection] = []
+_cloud_circuit: dict[str, Any] = {
+    "openrouter_disabled_until": 0.0,
+    "last_failure": "",
+    "last_model": "",
+}
 
 
 def get_brain_status() -> dict[str, Any]:
@@ -234,6 +239,7 @@ def get_brain_status() -> dict[str, Any]:
         "require_free_models": settings.BRAIN_REQUIRE_FREE_MODELS,
         "openrouter_key_configured": bool(_active_openrouter_key()),
         "catalog_cached_models": len(_catalog_cache.get("models") or {}),
+        "cloud_circuit": _cloud_circuit_status(),
         "recent_selections": [item.to_dict() for item in _selection_log[-25:]],
         "profiles": {
             role: {
@@ -291,7 +297,12 @@ def get_crewai_llm_for_role(role: str, agent_id: str) -> str | LLM:
 
 def select_brain(role: str, agent_id: str = "unknown") -> BrainSelection:
     profile = get_profile(role)
-    if settings.BRAIN_CLOUD_ENABLED and settings.BRAIN_PREFER_OPENROUTER_FREE and _active_openrouter_key():
+    if (
+        settings.BRAIN_CLOUD_ENABLED
+        and settings.BRAIN_PREFER_OPENROUTER_FREE
+        and _active_openrouter_key()
+        and not _is_openrouter_circuit_open()
+    ):
         model = _select_openrouter_free_model(profile)
         if model:
             gate.validate(model["id"], agent_id=agent_id)
@@ -318,6 +329,39 @@ def select_brain(role: str, agent_id: str = "unknown") -> BrainSelection:
     )
     _record_selection(selection)
     return selection
+
+
+def record_transient_openrouter_failure(model: str, error: Exception | str) -> None:
+    """Temporarily route agents to local models after rate limits/provider instability."""
+    cooldown_seconds = max(30, int(settings.OPENROUTER_TRANSIENT_COOLDOWN_SECONDS or 300))
+    disabled_until = time.time() + cooldown_seconds
+    _cloud_circuit["openrouter_disabled_until"] = disabled_until
+    _cloud_circuit["last_model"] = model
+    _cloud_circuit["last_failure"] = _sanitize_failure(str(error))
+    logger.warning(
+        "[BrainRouter] OpenRouter circuit opened for %ss after transient failure on %s.",
+        cooldown_seconds,
+        model or "unknown",
+    )
+
+
+def _is_openrouter_circuit_open() -> bool:
+    return time.time() < float(_cloud_circuit.get("openrouter_disabled_until") or 0)
+
+
+def _cloud_circuit_status() -> dict[str, Any]:
+    disabled_until = float(_cloud_circuit.get("openrouter_disabled_until") or 0)
+    now = time.time()
+    return {
+        "openrouter_circuit_open": now < disabled_until,
+        "cooldown_remaining_seconds": max(0, int(disabled_until - now)),
+        "last_model": _cloud_circuit.get("last_model") or "",
+        "last_failure": _cloud_circuit.get("last_failure") or "",
+    }
+
+
+def _sanitize_failure(value: str) -> str:
+    return value.replace("\n", " ")[:320]
 
 
 def _record_selection(selection: BrainSelection) -> None:

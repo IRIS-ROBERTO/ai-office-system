@@ -16,6 +16,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from langchain_core.language_models import BaseChatModel
@@ -27,6 +28,10 @@ from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamTy
 from backend.core.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
+
+_ROOT = Path(__file__).resolve().parents[2]
+_FALLBACK_DIR = _ROOT / ".runtime" / "improvement-loop"
+_FALLBACK_FILE = _FALLBACK_DIR / "supabase-fallback.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -541,11 +546,10 @@ class ImprovementLoop:
                 new_status,
             )
         except Exception as exc:
-            logger.error(
-                "[ImprovementLoop] Falha ao atualizar proposal %s no Supabase: %s",
-                proposal_id,
+            _log_persistence_failure(
+                "Falha ao atualizar proposal no Supabase",
                 exc,
-                exc_info=True,
+                {"proposal_id": proposal_id, "status": new_status},
             )
 
         # Emite evento via EventBus
@@ -627,8 +631,10 @@ class ImprovementLoop:
                 proposal.title,
             )
         except Exception as exc:
-            logger.error(
-                "[ImprovementLoop] Falha ao criar tarefa de melhoria: %s", exc, exc_info=True
+            _log_persistence_failure(
+                "Falha ao criar tarefa de melhoria no Supabase",
+                exc,
+                {"proposal_id": proposal.proposal_id, "title": proposal.title},
             )
 
     # ------------------------------------------------------------------
@@ -700,8 +706,18 @@ class ImprovementLoop:
                     )
 
         except Exception as exc:
-            logger.error(
-                "[ImprovementLoop] Falha ao persistir no Supabase: %s", exc, exc_info=True
+            _save_local_fallback(
+                "save_to_supabase",
+                {
+                    "analyses": [item.to_dict() for item in analyses],
+                    "proposals": [item.to_dict() for item in proposals],
+                },
+                exc,
+            )
+            _log_persistence_failure(
+                "Falha ao persistir no Supabase; snapshot salvo localmente",
+                exc,
+                {"analyses": len(analyses), "proposals": len(proposals)},
             )
 
     # ------------------------------------------------------------------
@@ -767,11 +783,7 @@ class ImprovementLoop:
             return loaded
 
         except Exception as exc:
-            logger.error(
-                "[ImprovementLoop] Falha ao carregar proposals do Supabase: %s",
-                exc,
-                exc_info=True,
-            )
+            _log_persistence_failure("Falha ao carregar proposals do Supabase", exc)
             return []
 
     async def get_improvement_metrics(self) -> dict:
@@ -815,10 +827,8 @@ class ImprovementLoop:
             }
 
         except Exception as exc:
-            logger.error(
-                "[ImprovementLoop] Falha ao calcular métricas: %s", exc, exc_info=True
-            )
-            return {}
+            _log_persistence_failure("Falha ao calcular metricas no Supabase", exc)
+            return self._fallback_metrics()
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -830,6 +840,83 @@ class ImprovementLoop:
             if p.proposal_id == proposal_id:
                 return p
         return None
+
+    def _fallback_metrics(self) -> dict:
+        if not _FALLBACK_FILE.exists():
+            return {
+                "total_proposals": len(self._pending_proposals),
+                "by_status": {"pending": len(self.get_pending_proposals())},
+                "by_category": {},
+                "by_impact": {},
+                "approval_rate": 0.0,
+                "provider": "memory_only",
+            }
+
+        rows = _read_fallback_rows()
+        return {
+            "total_proposals": len(self._pending_proposals),
+            "by_status": {"pending": len(self.get_pending_proposals())},
+            "by_category": {},
+            "by_impact": {},
+            "approval_rate": 0.0,
+            "provider": "local_fallback",
+            "fallback_snapshots": len(rows),
+            "fallback_path": str(_FALLBACK_FILE),
+        }
+
+
+def _save_local_fallback(operation: str, payload: dict, exc: Exception) -> None:
+    _FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+    row = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "operation": operation,
+        "error": _compact_error(exc),
+        "payload": payload,
+    }
+    with _FALLBACK_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def _read_fallback_rows() -> list[dict]:
+    if not _FALLBACK_FILE.exists():
+        return []
+    rows: list[dict] = []
+    for line in _FALLBACK_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _log_persistence_failure(message: str, exc: Exception, context: dict | None = None) -> None:
+    payload = {"error": _compact_error(exc), **(context or {})}
+    if _is_transient_persistence_error(exc):
+        logger.warning("[ImprovementLoop] %s: %s", message, payload)
+    else:
+        logger.error("[ImprovementLoop] %s: %s", message, payload, exc_info=True)
+
+
+def _is_transient_persistence_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "getaddrinfo failed",
+            "connecterror",
+            "connection refused",
+            "timed out",
+            "timeout",
+            "temporary failure",
+            "network is unreachable",
+        )
+    )
+
+
+def _compact_error(exc: Exception) -> str:
+    return str(exc).replace("\n", " ")[:360]
 
 
 # ---------------------------------------------------------------------------

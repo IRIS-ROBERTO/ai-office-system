@@ -36,6 +36,7 @@ from backend.core.static_web_delivery import (
     execute_static_web_delivery,
 )
 from backend.core.state import TaskState
+from backend.tools.brain_router import record_transient_openrouter_failure
 from backend.tools.ollama_tool import get_crewai_llm_str, get_senior_llm
 
 logger = logging.getLogger(__name__)
@@ -419,6 +420,7 @@ class BaseOrchestrator(ABC):
                 last_exc = exc
                 err_str = str(exc).lower()
                 if "429" in err_str or "rate" in err_str or "quota" in err_str:
+                    record_transient_openrouter_failure(str(getattr(_llm_attempt, "model", "?")), exc)
                     logger.warning(
                         "[%s] RateLimit/Quota em %s — tentando proximo modelo. Erro: %s",
                         orch_id, getattr(_llm_attempt, 'model', '?'), exc
@@ -895,6 +897,7 @@ class BaseOrchestrator(ABC):
             )
         except Exception as exc:
             if _is_transient_model_error(exc):
+                record_transient_openrouter_failure(str(getattr(crewai_agent, "llm", "unknown")), exc)
                 fallback_llm = get_crewai_llm_str(role)
                 logger.warning(
                     "[execute_subtask] Modelo remoto falhou para '%s'; fallback local %s. Erro: %s",

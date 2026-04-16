@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     BRAIN_PREFER_OPENROUTER_FREE: bool = True
     BRAIN_REQUIRE_FREE_MODELS: bool = True
     OPENROUTER_MODEL_CATALOG_TTL_SECONDS: int = 600
+    OPENROUTER_TRANSIENT_COOLDOWN_SECONDS: int = 300
 
     LOCAL_MODEL_CODE: str = "qwen2.5-coder:32b"
     LOCAL_MODEL_VISION: str = "qwen3-vl:8b"
