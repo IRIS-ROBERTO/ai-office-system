@@ -29,7 +29,9 @@ from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamTy
 from backend.core.gold_standard import REPO_ROOT, build_gold_standard_prompt
 from backend.core.improvement_loop import improvement_loop
 from backend.core.static_web_delivery import (
+    can_handle_complex_project_delivery,
     can_handle_static_web_delivery,
+    execute_complex_project_delivery,
     execute_static_web_delivery,
 )
 from backend.core.state import TaskState
@@ -333,6 +335,35 @@ class BaseOrchestrator(ABC):
             self._report_progress({**state, **result})
             return result
 
+        if self._wants_gold_standard_project_pipeline(state["original_request"]):
+            senior_directive = (
+                "Executar como projeto completo em pipeline padrão ouro. O orquestrador deve "
+                "garantir participação sequencial de planner, frontend, backend, qa, security "
+                "e docs. Cada especialista deve produzir arquivos reais, validar objetivamente, "
+                "criar commit local próprio e retornar DELIVERY_EVIDENCE verificável. O projeto "
+                "só pode ser agregado quando todos os manifestos obrigatórios estiverem aprovados."
+            )
+            subtasks = self._gold_standard_project_subtasks(state["original_request"])
+            self._trace(
+                task_id,
+                "senior_planning_complete",
+                f"Pipeline padrao ouro aplicado com {len(subtasks)} especialistas.",
+                agent_id=orch_id,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={"subtask_count": len(subtasks), "mode": "gold_standard_project_pipeline"},
+            )
+            result = {
+                "senior_directive": senior_directive,
+                "subtasks": subtasks,
+                "current_subtask_index": 0,
+                "messages": [
+                    HumanMessage(content=state["original_request"]),
+                    AIMessage(content=senior_directive),
+                ],
+            }
+            self._report_progress({**state, **result})
+            return result
+
         system_prompt = (
             f"{self._senior_system_context}\n\n"
             "Você é o Orquestrador Sênior do AI Office System.\n"
@@ -567,6 +598,107 @@ class BaseOrchestrator(ABC):
             agent_role=agent_role_enum.value,
             metadata={"subtask_id": subtask["id"], "retry_count": state["retry_count"]},
         )
+
+        if can_handle_complex_project_delivery(subtask):
+            try:
+                output_text = execute_complex_project_delivery(
+                    task_id=task_id,
+                    subtask_id=subtask["id"],
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    subtask=subtask,
+                )
+                self._trace(
+                    task_id,
+                    "deterministic_executor",
+                    f"Executor deterministico entregou artefatos do especialista {role}.",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
+            except Exception as exc:
+                output_text = f"ERRO: executor deterministico de projeto completo falhou: {exc}"
+                self._trace(
+                    task_id,
+                    "deterministic_executor_failed",
+                    f"Executor deterministico de projeto completo falhou: {exc}",
+                    level="error",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
+
+            updated_outputs = dict(state.get("agent_outputs") or {})
+            updated_outputs[subtask["id"]] = output_text
+            updated_evidence = dict(state.get("delivery_evidence") or {})
+            updated_manifests = dict(state.get("delivery_manifests") or {})
+
+            manifest = delivery_runner.evaluate_subtask_output(
+                task_id=task_id,
+                subtask=subtask,
+                output_text=output_text,
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                team=self.team.value,
+                require_commit=True,
+            )
+            updated_manifests[subtask["id"]] = manifest.to_dict()
+            self._trace(
+                task_id,
+                "delivery_manifest",
+                f"Delivery Runner avaliou '{subtask['title']}' com approved={manifest.approved}.",
+                agent_id=self.ORCHESTRATOR_AGENT_ID,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={
+                    "subtask_id": subtask["id"],
+                    "approved": manifest.approved,
+                    "manifest_path": manifest.manifest_path,
+                    "failed_stages": [
+                        stage.name for stage in manifest.stages if stage.required and not stage.passed
+                    ],
+                },
+            )
+
+            evidence_payload = dict(manifest.evidence or {})
+            if evidence_payload:
+                evidence_payload["approved"] = manifest.approved
+                evidence_payload["feedback"] = manifest.feedback
+                evidence_payload["manifest_path"] = manifest.manifest_path
+                updated_evidence[subtask["id"]] = evidence_payload
+
+                commit_sha = str(evidence_payload.get("commit_sha") or "")
+                if manifest.approved and commit_sha:
+                    await _emit(
+                        EventType.GIT_COMMIT,
+                        self.team,
+                        agent_id,
+                        agent_role_enum,
+                        task_id=task_id,
+                        payload={
+                            "subtask_id": subtask["id"],
+                            "sha": commit_sha,
+                            "message": evidence_payload.get("commit_message"),
+                            "files": evidence_payload.get("files_changed"),
+                            "pushed": evidence_payload.get("pushed"),
+                            "manifest_path": manifest.manifest_path,
+                        },
+                    )
+
+            self._trace(
+                task_id,
+                "subtask_complete",
+                f"Subtarefa '{subtask['title']}' encerrou execucao.",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+            )
+            result = {
+                "agent_outputs": updated_outputs,
+                "delivery_evidence": updated_evidence,
+                "delivery_manifests": updated_manifests,
+            }
+            self._report_progress({**state, **result})
+            return result
 
         if can_handle_static_web_delivery(subtask):
             try:
@@ -1007,6 +1139,59 @@ class BaseOrchestrator(ABC):
             )
             return {
                 "quality_approved": True,
+                "current_subtask_index": idx,
+            }
+
+        if manifest_payload.get("approved") is False:
+            feedback = str(manifest_payload.get("feedback") or "Delivery Runner reprovou a entrega.")
+            retry_count = state.get("retry_count", 0) + 1
+            updated_outputs = dict(agent_outputs)
+            updated_outputs[f"{subtask['id']}_feedback"] = feedback
+            self._trace(
+                task_id,
+                "deterministic_gate_failed",
+                f"Manifesto deterministico reprovou '{subtask['title']}': {feedback}",
+                level="warning",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={
+                    "subtask_id": subtask["id"],
+                    "retry_count": retry_count,
+                    "manifest_path": manifest_payload.get("manifest_path"),
+                },
+            )
+
+            if retry_count >= MAX_RETRIES:
+                errors = list(state.get("errors") or [])
+                errors.append(
+                    f"Subtarefa '{subtask['title']}' reprovada pelo manifesto deterministico "
+                    f"apos {MAX_RETRIES} tentativas. Ultimo feedback: {feedback}"
+                )
+                await _emit(
+                    EventType.TASK_FAILED,
+                    self.team,
+                    agent_id,
+                    agent_role_enum,
+                    task_id=task_id,
+                    payload={
+                        "subtask_id": subtask["id"],
+                        "feedback": feedback,
+                        "retry_count": retry_count,
+                        "manifest_path": manifest_payload.get("manifest_path"),
+                    },
+                )
+                return {
+                    "quality_approved": False,
+                    "retry_count": retry_count,
+                    "agent_outputs": updated_outputs,
+                    "errors": errors,
+                    "current_subtask_index": idx,
+                }
+
+            return {
+                "quality_approved": False,
+                "retry_count": retry_count,
+                "agent_outputs": updated_outputs,
                 "current_subtask_index": idx,
             }
 
@@ -1525,10 +1710,83 @@ class BaseOrchestrator(ABC):
             return "backend"
         return "content"
 
+    def _wants_gold_standard_project_pipeline(self, request: str) -> bool:
+        if self.team != TeamType.DEV:
+            return False
+        normalized = request.lower()
+        markers = (
+            "iris_complex_project_delivery",
+            "projeto completo",
+            "aplicacao completa",
+            "aplicação completa",
+            "aplicativo completo",
+            "cada especialista",
+            "multi-agente",
+            "multi agente",
+            "todos os especialistas",
+            "planner, frontend, backend, qa, security",
+        )
+        return any(marker in normalized for marker in markers)
+
+    def _gold_standard_project_subtasks(self, request: str) -> list[dict]:
+        project_instruction = (
+            f"{request}\n\n"
+            "IRIS_COMPLEX_PROJECT_DELIVERY: usar executor padrao ouro multi-especialista. "
+            "Cada subtarefa deve criar artefatos reais no projeto gerado, validar, commitar "
+            "e retornar DELIVERY_EVIDENCE completo."
+        )
+        role_specs = [
+            (
+                "planner",
+                "Planejar arquitetura, contratos e critérios do projeto",
+                "Criar docs/ARCHITECTURE.md, docs/API_CONTRACT.md e project.plan.json com escopo, módulos, critérios e handoffs.",
+            ),
+            (
+                "frontend",
+                "Implementar interface corporativa responsiva",
+                "Criar index.html, src/styles.css, src/app.js e src/data.js com Command Center, agentes, pipeline e evidência interativa.",
+            ),
+            (
+                "backend",
+                "Criar contrato local de dados e API mock",
+                "Criar package.json, src/api.js, src/store.js e docs/BACKEND_CONTRACT.md com funções puras verificáveis.",
+            ),
+            (
+                "qa",
+                "Validar entrega com smoke test executável",
+                "Criar tests/smoke-check.js e docs/QA_REPORT.md validando arquivos, assets e eventos DOM.",
+            ),
+            (
+                "security",
+                "Revisar segurança e hardening",
+                "Criar security/SECURITY_REVIEW.md e security/headers.json com threat model e headers recomendados.",
+            ),
+            (
+                "docs",
+                "Documentar operação e handoff",
+                "Criar README.md e docs/RUNBOOK.md com execução local, validação, critérios de promoção e operação.",
+            ),
+        ]
+        return [
+            {
+                "id": str(uuid.uuid4()),
+                "title": title,
+                "description": f"{project_instruction}\n\nResponsabilidade do especialista {role}: {description}",
+                "assigned_role": role,
+                "acceptance_criteria": (
+                    f"{description} Validar objetivamente, criar commit local proprio, "
+                    "não usar segredos, manter tudo dentro de IRIS_GENERATED_PROJECTS e responder com DELIVERY_EVIDENCE."
+                ),
+            }
+            for role, title, description in role_specs
+        ]
+
     def _fallback_subtasks_for_request(self, request: str) -> list[dict]:
         """Deterministic fallback when senior planning returns malformed JSON."""
         normalized = request.lower()
         if self.team == TeamType.DEV:
+            if self._wants_gold_standard_project_pipeline(request):
+                return self._gold_standard_project_subtasks(request)
             role = self._infer_dev_role_for_request(normalized)
             return [
                 {

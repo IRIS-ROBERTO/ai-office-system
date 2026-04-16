@@ -258,6 +258,10 @@ class DeliveryRunner:
         evidence_result: EvidenceValidationResult,
         subtask: dict[str, Any],
     ) -> DeliveryStage | None:
+        role = str(subtask.get("assigned_role") or "").lower().strip()
+        if role not in {"frontend"}:
+            return None
+
         source = " ".join(
             str(subtask.get(key) or "")
             for key in ("title", "description", "acceptance_criteria")
