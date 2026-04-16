@@ -2,7 +2,7 @@
   "version": 2,
   "agents": {
     "defaults": {
-      "workspace": "~/.picoclaw/workspace",
+      "workspace": "C:/Users/radar/Desktop/SUCESSOS!!!!!!!!!!!!!!!!!!!!!!!!!!/AIteams/_system/picoclaw",
       "restrict_to_workspace": true,
       "allow_read_outside_workspace": false,
       "model_name": "local-ollama",
@@ -49,7 +49,7 @@
         "filesystem": {
           "enabled": true,
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "~/.picoclaw/workspace"]
+          "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/radar/Desktop/SUCESSOS!!!!!!!!!!!!!!!!!!!!!!!!!!/AIteams"]
         },
         "memory": {
           "enabled": true,

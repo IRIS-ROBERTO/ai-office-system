@@ -25,7 +25,7 @@ from backend.core.gold_standard import GENERATED_PROJECTS_ROOT, REPO_ROOT
 logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
-BLOCKED_COMMIT_PARTS = {".git", ".runtime", ".venv", "node_modules", "dist", "__pycache__"}
+BLOCKED_COMMIT_PARTS = {".git", ".runtime", ".venv", "_system", "node_modules", "dist", "__pycache__"}
 BLOCKED_COMMIT_FILES = {".env", ".env.local"}
 
 
@@ -305,7 +305,9 @@ class GitHubTool(BaseTool):
         except ValueError:
             pass
         try:
-            candidate.relative_to(GENERATED_PROJECTS_ROOT)
+            relative = candidate.relative_to(GENERATED_PROJECTS_ROOT)
+            if not relative.parts or relative.parts[0] == "_system":
+                return False
             return True
         except ValueError:
             return False

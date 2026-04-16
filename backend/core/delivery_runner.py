@@ -442,7 +442,7 @@ class DeliveryRunner:
 
         if GENERATED_PROJECTS_ROOT.exists():
             for candidate in GENERATED_PROJECTS_ROOT.iterdir():
-                if candidate.is_dir() and self._is_allowed_generated_repo(candidate):
+                if candidate.is_dir() and candidate.name != "_system" and self._is_allowed_generated_repo(candidate):
                     roots.append(candidate.resolve())
 
         unique: list[Path] = []
@@ -456,7 +456,9 @@ class DeliveryRunner:
 
     def _is_allowed_generated_repo(self, path: Path) -> bool:
         try:
-            path.resolve().relative_to(GENERATED_PROJECTS_ROOT.resolve())
+            relative = path.resolve().relative_to(GENERATED_PROJECTS_ROOT.resolve())
+            if not relative.parts or relative.parts[0] == "_system":
+                return False
             return True
         except ValueError:
             return False

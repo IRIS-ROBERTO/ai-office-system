@@ -24,6 +24,7 @@ BLOCKED_PARTS = {
     ".git",
     ".runtime",
     ".venv",
+    "_system",
     "node_modules",
     "dist",
     "__pycache__",
@@ -47,7 +48,7 @@ class WorkspaceInput(BaseModel):
         "validate_py_compile",
         "npm_build",
     ] = Field(description="Operacao segura no workspace")
-    path: Optional[str] = Field(default=None, description="Arquivo/pasta relativo ao repo ou dentro de IRIS_GENERATED_PROJECTS")
+    path: Optional[str] = Field(default=None, description="Arquivo/pasta relativo ao repo ou dentro da raiz AIteams")
     content: Optional[str] = Field(default=None, description="Conteudo usado em write/append")
     old_text: Optional[str] = Field(default=None, description="Texto exato a substituir na action replace")
     new_text: Optional[str] = Field(default=None, description="Novo texto usado na action replace")
@@ -176,9 +177,22 @@ class WorkspaceTool(BaseTool):
         rel_parts = set(target.parts)
         if rel_parts & BLOCKED_PARTS:
             raise RuntimeError(f"path bloqueado: {path}")
+        self._ensure_generated_project_path(target, path)
         if target.name in BLOCKED_FILES:
             raise RuntimeError(f"arquivo sensivel bloqueado: {path}")
         return target
+
+    def _ensure_generated_project_path(self, target: Path, original_path: str) -> None:
+        try:
+            relative = target.relative_to(GENERATED_PROJECTS_ROOT)
+        except ValueError:
+            return
+        if not relative.parts:
+            raise RuntimeError(f"path deve apontar para uma pasta de projeto dentro de AIteams: {original_path}")
+        if relative.parts[0] == "_system":
+            raise RuntimeError(f"path reservado para runtime interno: {original_path}")
+        if len(relative.parts) == 1 and target.suffix:
+            raise RuntimeError(f"arquivos devem ficar dentro de uma pasta de projeto em AIteams: {original_path}")
 
     def _is_allowed_root(self, target: Path) -> bool:
         try:

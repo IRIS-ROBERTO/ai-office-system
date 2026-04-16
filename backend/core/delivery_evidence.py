@@ -262,7 +262,9 @@ def _git_root(path: Path) -> Path | None:
 def _is_allowed_repo_root(path: Path) -> bool:
     for root in _ALLOWED_REPO_ROOTS:
         try:
-            path.relative_to(root)
+            relative = path.relative_to(root)
+            if root == GENERATED_PROJECTS_ROOT and (not relative.parts or relative.parts[0] == "_system"):
+                return False
             return True
         except ValueError:
             continue

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any
@@ -26,7 +27,7 @@ from backend.core.delivery_runner import delivery_runner
 from backend.core.event_bus import event_bus
 from backend.core.execution_trace import append_execution_log
 from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamType
-from backend.core.gold_standard import REPO_ROOT, build_gold_standard_prompt
+from backend.core.gold_standard import GENERATED_PROJECTS_ROOT, REPO_ROOT, build_gold_standard_prompt
 from backend.core.improvement_loop import improvement_loop
 from backend.core.static_web_delivery import (
     can_handle_complex_project_delivery,
@@ -831,7 +832,7 @@ class BaseOrchestrator(ABC):
                 "conteúdo ou configuração), deve usar a tool `github_commit` em modo local "
                 "com `repo_path`, `file_paths` e `commit_message` para fazer git add e git commit "
                 "no repositório local.\n"
-                f"Use repo_path='{REPO_ROOT}' para alterar o IRIS. Para projeto gerado, use a raiz git/worktree que contém o projeto em IRIS_GENERATED_PROJECTS. Use push=false se o remoto não estiver disponível.\n"
+                f"Use repo_path='{REPO_ROOT}' para alterar o IRIS. Para projeto gerado, use a raiz git/worktree criada dentro de '{GENERATED_PROJECTS_ROOT}'. Use push=false se o remoto não estiver disponível.\n"
                 "Nunca conclua a subtarefa sem evidência explícita do commit real retornado pela tool.\n"
                 "No seu output final, inclua exatamente este bloco parseável:\n"
                 "DELIVERY_EVIDENCE\n"
@@ -1729,10 +1730,13 @@ class BaseOrchestrator(ABC):
         return any(marker in normalized for marker in markers)
 
     def _gold_standard_project_subtasks(self, request: str) -> list[dict]:
+        project_slug = self._project_slug_for_request(request)
+        project_root = GENERATED_PROJECTS_ROOT / project_slug
         project_instruction = (
             f"{request}\n\n"
             "IRIS_COMPLEX_PROJECT_DELIVERY: usar executor padrao ouro multi-especialista. "
-            "Cada subtarefa deve criar artefatos reais no projeto gerado, validar, commitar "
+            f"Projeto gerado obrigatorio: {project_root}. "
+            "Cada subtarefa deve criar artefatos reais nessa pasta de projeto, validar, commitar "
             "e retornar DELIVERY_EVIDENCE completo."
         )
         role_specs = [
@@ -1775,11 +1779,20 @@ class BaseOrchestrator(ABC):
                 "assigned_role": role,
                 "acceptance_criteria": (
                     f"{description} Validar objetivamente, criar commit local proprio, "
-                    "não usar segredos, manter tudo dentro de IRIS_GENERATED_PROJECTS e responder com DELIVERY_EVIDENCE."
+                    f"não usar segredos, manter tudo dentro de {project_root} e responder com DELIVERY_EVIDENCE."
                 ),
             }
             for role, title, description in role_specs
         ]
+
+    def _project_slug_for_request(self, request: str) -> str:
+        source = request
+        title_match = re.search(r"^\s*TITULO:\s*(.+?)\s*$", request, re.IGNORECASE | re.MULTILINE)
+        if title_match:
+            source = title_match.group(1)
+        slug = re.sub(r"[^a-z0-9]+", "-", source.lower()).strip("-")
+        slug = slug[:48].strip("-") or "iris-project"
+        return f"{slug}-{uuid.uuid4().hex[:8]}"
 
     def _fallback_subtasks_for_request(self, request: str) -> list[dict]:
         """Deterministic fallback when senior planning returns malformed JSON."""

@@ -17,6 +17,7 @@ param(
     [switch]$OverwriteConfig = $false,
     [string]$InstallDir = "$env:LOCALAPPDATA\PicoClaw",
     [string]$PicoClawHome = "$env:USERPROFILE\.picoclaw",
+    [string]$AITeamsRoot = "$env:USERPROFILE\Desktop\SUCESSOS!!!!!!!!!!!!!!!!!!!!!!!!!!\AIteams",
     [int]$GatewayPort = 18790
 )
 
@@ -33,7 +34,7 @@ Write-Host ""
 Write-Host "=== IRIS PicoClaw Gateway Installer ===" -ForegroundColor Cyan
 Write-Host ""
 
-foreach ($dir in @($InstallDir, $PicoClawHome, (Join-Path $PicoClawHome "workspace"))) {
+foreach ($dir in @($InstallDir, $PicoClawHome, $AITeamsRoot, (Join-Path $AITeamsRoot "_system\picoclaw"))) {
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir | Out-Null
         Write-Host "[+] Created directory: $dir" -ForegroundColor Green

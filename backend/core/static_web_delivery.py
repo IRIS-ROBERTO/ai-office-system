@@ -2,7 +2,7 @@
 Deterministic executor for small static web deliveries.
 
 This is a narrow safety path for atomic frontend tasks that ask for a vanilla
-HTML/CSS/JS project under IRIS_GENERATED_PROJECTS. It keeps the agent workflow
+HTML/CSS/JS project under AIteams. It keeps the agent workflow
 reliable when cloud models are rate-limited and local code models are too heavy.
 """
 from __future__ import annotations
@@ -647,11 +647,13 @@ def _extract_project_root(subtask: dict[str, Any]) -> Path:
         if candidate.is_file():
             candidate = candidate.parent
         try:
-            candidate.relative_to(GENERATED_PROJECTS_ROOT.resolve())
+            relative = candidate.relative_to(GENERATED_PROJECTS_ROOT.resolve())
+            if not relative.parts or relative.parts[0] == "_system":
+                continue
             return candidate
         except ValueError:
             continue
-    raise RuntimeError("static web delivery requires a project path under IRIS_GENERATED_PROJECTS")
+    raise RuntimeError(f"static web delivery requires a project path under {GENERATED_PROJECTS_ROOT}")
 
 
 def _git(repo_root: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:

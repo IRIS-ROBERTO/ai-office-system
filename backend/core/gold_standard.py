@@ -10,7 +10,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GENERATED_PROJECTS_ROOT = Path.home() / "Desktop" / "IRIS_GENERATED_PROJECTS"
+GENERATED_PROJECTS_ROOT = Path.home() / "Desktop" / "SUCESSOS!!!!!!!!!!!!!!!!!!!!!!!!!!" / "AIteams"
+GENERATED_PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def build_gold_standard_prompt(*, role: str, agent_id: str) -> str:
@@ -19,7 +20,9 @@ def build_gold_standard_prompt(*, role: str, agent_id: str) -> str:
         f"Agente: {agent_id} / role: {role}\n"
         f"Repositorio local autorizado: {REPO_ROOT}\n\n"
         f"Raiz autorizada para projetos gerados: {GENERATED_PROJECTS_ROOT}\n"
-        "Quando a tarefa pedir uma aplicacao/projeto novo, crie e mantenha tudo dentro dessa raiz.\n\n"
+        "Quando a tarefa pedir uma aplicacao/projeto novo, crie uma pasta propria dentro dessa raiz "
+        "e mantenha todos os arquivos, testes e commits desse projeto ali. "
+        "Nao use a pasta reservada `_system`.\n\n"
         "Fluxo obrigatorio para qualquer entrega versionavel:\n"
         "1. Entender o escopo e listar arquivos que precisam mudar.\n"
         "2. Usar a tool `workspace_file` para ler, alterar e inspecionar arquivos reais do workspace.\n"
