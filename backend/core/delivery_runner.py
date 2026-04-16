@@ -22,6 +22,7 @@ from backend.core.delivery_evidence import (
     validate_delivery_evidence,
 )
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
+from backend.core.memory_gateway import memory_gateway
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -140,7 +141,15 @@ class DeliveryRunner:
         )
         manifest.manifest_path = str(self._manifest_path(manifest.task_id, manifest.subtask_id))
         self._write_manifest(manifest)
+        self._capture_memory(manifest)
         return manifest
+
+    def _capture_memory(self, manifest: DeliveryManifest) -> None:
+        try:
+            memory_gateway.capture_from_delivery_manifest(manifest.to_dict())
+        except Exception:
+            # Memory must never block delivery approval. It is an optimization layer.
+            return
 
     def _plan_lock_stage(self, subtask: dict[str, Any]) -> DeliveryStage:
         missing = [

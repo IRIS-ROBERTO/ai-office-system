@@ -67,6 +67,22 @@ class AgentPersonalityUpdate(BaseModel):
     visibility_level: Optional[str] = None
 
 
+class MemoryCreateRequest(BaseModel):
+    memory_class: str
+    content: str
+    source: str = "operator_manual"
+    source_id: str = ""
+    task_id: str = ""
+    subtask_id: str = ""
+    agent_id: str = ""
+    agent_role: str = ""
+    project_path: str = ""
+    tags: list[str] = Field(default_factory=list)
+    confidence: float = 0.8
+    approved: bool = True
+    metadata: dict = Field(default_factory=dict)
+
+
 class SystemHealth(BaseModel):
     api: str
     redis: str

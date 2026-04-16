@@ -36,6 +36,7 @@ from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_h
 from backend.core.agent_personality import get_agent_config, update_agent_config
 from backend.core.agent_capability_matrix import build_agent_capability, build_agent_capability_matrix
 from backend.core.agent_runtime_gateway import get_runtime_gateway_status
+from backend.core.memory_gateway import memory_gateway
 from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
 from backend.config.settings import settings
@@ -58,6 +59,7 @@ from backend.api.schemas import (
     AgentCapabilities,
     AgentPersonalityConfig,
     AgentPersonalityUpdate,
+    MemoryCreateRequest,
     DeliveryAuditListResponse,
     DeliveryAuditTaskResponse,
     ProductionReadinessResponse,
@@ -735,6 +737,59 @@ async def get_picoclaw_integration_status():
 async def get_agent_runtime_gateway():
     """Retorna provedores de runtime avaliados e a decisão operacional ativa."""
     return await get_runtime_gateway_status()
+
+
+@app.get("/integrations/memory-gateway")
+async def get_memory_gateway_status():
+    """Retorna status da memoria governada local e classes liberadas."""
+    return memory_gateway.status()
+
+
+@app.get("/memory/search")
+async def search_memory(
+    query: str,
+    memory_class: str | None = None,
+    agent_role: str | None = None,
+    limit: int = 10,
+):
+    """Busca memorias aprovadas por texto simples, classe e papel do agente."""
+    return {
+        "query": query,
+        "items": memory_gateway.search(
+            query=query,
+            memory_class=memory_class,
+            agent_role=agent_role,
+            limit=limit,
+        ),
+    }
+
+
+@app.get("/memory")
+async def list_memory(
+    memory_class: str | None = None,
+    agent_role: str | None = None,
+    limit: int = 50,
+):
+    """Lista memorias governadas mais recentes."""
+    return {
+        "items": [
+            record.to_dict()
+            for record in memory_gateway.list_memories(
+                memory_class=memory_class,
+                agent_role=agent_role,
+                limit=limit,
+            )
+        ]
+    }
+
+
+@app.post("/memory")
+async def create_memory(body: MemoryCreateRequest):
+    """Cria memoria manual aprovada pelo operador, com bloqueio de segredos."""
+    result = memory_gateway.remember(**body.model_dump())
+    if not result.stored:
+        raise HTTPException(status_code=400, detail=result.to_dict())
+    return result.to_dict()
 
 
 @app.get("/production-readiness", response_model=ProductionReadinessResponse)
