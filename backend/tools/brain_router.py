@@ -230,6 +230,10 @@ _cloud_circuit: dict[str, Any] = {
     "last_failure": "",
     "last_model": "",
 }
+# Per-model rate-limit tracking: model_id -> disabled_until (epoch seconds)
+# Allows rotating to the next free candidate instead of killing all of OpenRouter.
+_model_rate_limits: dict[str, float] = {}
+_MODEL_RATE_LIMIT_COOLDOWN = 120  # seconds before retrying a rate-limited model
 
 
 def get_brain_status() -> dict[str, Any]:
@@ -240,6 +244,7 @@ def get_brain_status() -> dict[str, Any]:
         "openrouter_key_configured": bool(_active_openrouter_key()),
         "catalog_cached_models": len(_catalog_cache.get("models") or {}),
         "cloud_circuit": _cloud_circuit_status(),
+        "model_rate_limits": get_model_rate_limit_status(),
         "recent_selections": [item.to_dict() for item in _selection_log[-25:]],
         "profiles": {
             role: {
@@ -332,17 +337,36 @@ def select_brain(role: str, agent_id: str = "unknown") -> BrainSelection:
 
 
 def record_transient_openrouter_failure(model: str, error: Exception | str) -> None:
-    """Temporarily route agents to local models after rate limits/provider instability."""
-    cooldown_seconds = max(30, int(settings.OPENROUTER_TRANSIENT_COOLDOWN_SECONDS or 300))
-    disabled_until = time.time() + cooldown_seconds
-    _cloud_circuit["openrouter_disabled_until"] = disabled_until
-    _cloud_circuit["last_model"] = model
-    _cloud_circuit["last_failure"] = _sanitize_failure(str(error))
-    logger.warning(
-        "[BrainRouter] OpenRouter circuit opened for %ss after transient failure on %s.",
-        cooldown_seconds,
-        model or "unknown",
+    """Per-model rate-limit isolation.
+
+    429 / quota errors: marca APENAS o modelo que falhou com cooldown curto (120s).
+    Outros candidatos do mesmo role continuam disponíveis sem interrupção.
+
+    Falhas de auth / rede: abre o circuito global para evitar spam de erros.
+    """
+    err_str = _sanitize_failure(str(error))
+    is_rate_limit = any(
+        token in err_str.lower()
+        for token in ("429", "rate limit", "rate_limit", "quota", "too many request")
     )
+
+    if is_rate_limit:
+        _model_rate_limits[model] = time.time() + _MODEL_RATE_LIMIT_COOLDOWN
+        logger.warning(
+            "[BrainRouter] %s rate-limited — bloqueado por %ss, proximos candidatos livres.",
+            model or "unknown",
+            _MODEL_RATE_LIMIT_COOLDOWN,
+        )
+    else:
+        cooldown_seconds = max(30, int(settings.OPENROUTER_TRANSIENT_COOLDOWN_SECONDS or 300))
+        _cloud_circuit["openrouter_disabled_until"] = time.time() + cooldown_seconds
+        _cloud_circuit["last_model"] = model
+        _cloud_circuit["last_failure"] = err_str
+        logger.warning(
+            "[BrainRouter] Falha nao-RateLimit em %s — circuito global aberto por %ss.",
+            model or "unknown",
+            cooldown_seconds,
+        )
 
 
 def _is_openrouter_circuit_open() -> bool:
@@ -384,16 +408,32 @@ def _active_openrouter_key() -> str:
 
 def _select_openrouter_free_model(profile: BrainProfile) -> dict[str, Any] | None:
     catalog = _get_openrouter_catalog()
+    now = time.time()
     for candidate in profile.openrouter_candidates:
         model = catalog.get(candidate)
         if not model:
+            continue
+        # Skip models that hit their individual rate-limit cooldown
+        if now < float(_model_rate_limits.get(model["id"]) or 0):
+            logger.debug("[BrainRouter] %s ainda em cooldown (%.0fs), pulando.", model["id"],
+                         _model_rate_limits[model["id"]] - now)
             continue
         if profile.require_tools and not model.get("tools"):
             continue
         if profile.require_structured and not model.get("structured_outputs"):
             continue
         return model
-    return catalog.get("openrouter/free")
+    # Last resort generic free slot — skip if rate-limited too
+    fallback = catalog.get("openrouter/free")
+    if fallback and now >= float(_model_rate_limits.get(fallback["id"]) or 0):
+        return fallback
+    return None
+
+
+def get_model_rate_limit_status() -> dict[str, int]:
+    """Returns per-model remaining cooldown in seconds (only models still cooling down)."""
+    now = time.time()
+    return {mid: int(until - now) for mid, until in _model_rate_limits.items() if until > now}
 
 
 def _get_openrouter_catalog() -> dict[str, dict[str, Any]]:

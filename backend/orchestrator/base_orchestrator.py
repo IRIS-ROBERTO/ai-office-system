@@ -643,7 +643,7 @@ class BaseOrchestrator(ABC):
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
                 team=self.team.value,
-                require_commit=True,
+                require_commit=(self.team.value == "dev"),
             )
             updated_manifests[subtask["id"]] = manifest.to_dict()
             self._trace(
@@ -743,7 +743,7 @@ class BaseOrchestrator(ABC):
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
                 team=self.team.value,
-                require_commit=True,
+                require_commit=(self.team.value == "dev"),
             )
             updated_manifests[subtask["id"]] = manifest.to_dict()
             self._trace(
@@ -998,7 +998,7 @@ class BaseOrchestrator(ABC):
             agent_id=agent_id,
             agent_role=agent_role_enum.value,
             team=self.team.value,
-            require_commit=True,
+            require_commit=(self.team.value == "dev"),
         )
         updated_manifests[subtask["id"]] = manifest.to_dict()
         self._trace(
@@ -1203,7 +1203,7 @@ class BaseOrchestrator(ABC):
             output_text,
             task_id=task_id,
             subtask_id=subtask["id"],
-            require_commit=True,
+            require_commit=(self.team.value == "dev"),
         )
         if not deterministic_gate.approved:
             retry_count = state.get("retry_count", 0) + 1

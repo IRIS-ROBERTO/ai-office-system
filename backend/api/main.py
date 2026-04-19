@@ -6,11 +6,17 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import sys
+import threading
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
+
+import httpx
 
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -18,10 +24,11 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.event_bus import event_bus
+from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 from backend.core.delivery_audit import get_task_delivery_audit, list_delivery_audits
 from backend.core.execution_trace import (
     append_execution_log,
@@ -63,8 +70,14 @@ from backend.api.schemas import (
     DeliveryAuditListResponse,
     DeliveryAuditTaskResponse,
     ProductionReadinessResponse,
+    ResearchFindingsResponse,
+    ResearchStatsResponse,
+    ResearchScheduleConfig,
+    ResearchScheduleUpdate,
+    ResearchScrapeResponse,
 )
 from backend.api.websocket import websocket_endpoint
+from backend.core import research_store
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +85,102 @@ logger = logging.getLogger(__name__)
 # Estado in-memory: tasks e agentes rastreados em runtime
 # ---------------------------------------------------------------------------
 _active_tasks: dict[str, TaskState] = {}
+_tasks_lock = threading.Lock()                  # protege _active_tasks de race conditions
 _service_requests: dict[str, dict] = {}
 _task_to_service_request: dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# Rate limiting simples por IP (sem dependência externa)
+# ---------------------------------------------------------------------------
+_rate_counters: dict[str, list[float]] = defaultdict(list)  # ip → [timestamps]
+_RATE_LIMIT_MAX = 10         # máximo de requests por IP
+_RATE_LIMIT_WINDOW = 60.0    # janela em segundos
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Retorna True se o IP está dentro do limite. Thread-safe via GIL em list ops."""
+    import time
+    now = time.monotonic()
+    window_start = now - _RATE_LIMIT_WINDOW
+    timestamps = _rate_counters[client_ip]
+    # Remove timestamps fora da janela
+    _rate_counters[client_ip] = [t for t in timestamps if t > window_start]
+    if len(_rate_counters[client_ip]) >= _RATE_LIMIT_MAX:
+        return False
+    _rate_counters[client_ip].append(now)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Limpeza automática de tasks finalizadas (evita memory leak)
+# ---------------------------------------------------------------------------
+_TASKS_MAX_COMPLETED = 200   # mantém no máximo N tasks concluídas em memória
+
+
+def _cleanup_completed_tasks() -> int:
+    """Remove tasks finalizadas além do limite. Retorna quantidade removida."""
+    with _tasks_lock:
+        completed = [
+            tid for tid, state in _active_tasks.items()
+            if not _is_task_still_active(state)
+        ]
+        to_remove = completed[:-_TASKS_MAX_COMPLETED] if len(completed) > _TASKS_MAX_COMPLETED else []
+        for tid in to_remove:
+            _active_tasks.pop(tid, None)
+    return len(to_remove)
 
 
 # ---------------------------------------------------------------------------
 # Lifespan — startup / shutdown
 # ---------------------------------------------------------------------------
+async def _restore_tasks_from_supabase() -> None:
+    """
+    Recupera tasks persistidas no Supabase e restaura _active_tasks em memória.
+    Tasks que estavam 'running' são marcadas como interrompidas (processo reiniciou).
+    Falhas silenciosas — nunca bloqueia o boot.
+    """
+    from backend.core.supabase_repository import SupabaseRepository
+    from backend.config.settings import settings
+    if not settings.SUPABASE_URL or not settings.SUPABASE_ANON_KEY:
+        logger.info("[Lifespan] Supabase não configurado — restauração de tasks ignorada.")
+        return
+    try:
+        repo = SupabaseRepository()
+        rows = await repo.list_tasks(limit=100)
+        restored = 0
+        for row in rows:
+            task_id = row.get("task_id") or row.get("id")
+            if not task_id or task_id in _active_tasks:
+                continue
+            status = row.get("status", "")
+            errors: list[str] = []
+            if status == "running":
+                errors = ["Task interrompida pelo restart do servidor. Re-submeta se necessário."]
+            state: TaskState = TaskState(
+                task_id=task_id,
+                team=row.get("team", ""),
+                original_request=row.get("request", ""),
+                senior_directive=row.get("senior_directive"),
+                subtasks=row.get("subtasks") or [],
+                current_subtask_index=0,
+                agent_outputs=row.get("agent_outputs") or {},
+                delivery_evidence={},
+                delivery_manifests={},
+                quality_approved=False,
+                retry_count=row.get("retry_count", 0),
+                final_output=row.get("final_output"),
+                errors=errors,
+                messages=[],
+            )
+            with _tasks_lock:
+                _active_tasks[task_id] = state
+            restored += 1
+        if restored:
+            logger.info("[Lifespan] %d tasks restauradas do Supabase.", restored)
+    except Exception as exc:
+        logger.warning("[Lifespan] Restauração do Supabase falhou (não crítico): %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Conecta EventBus + Redis no startup; desconecta no shutdown."""
@@ -90,9 +192,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"[Lifespan] Falha ao conectar EventBus: {exc}")
 
+    # Inicializa Research Store e scheduler
+    research_store.initialize()
+    research_store.start_scheduler()
+    logger.info("[Lifespan] Research Store e Scheduler iniciados.")
+
+    # Restaura tasks persistidas do Supabase (best-effort, nunca bloqueia boot)
+    await _restore_tasks_from_supabase()
+
     yield
 
     logger.info("[Lifespan] Encerrando AI Office System...")
+    research_store.stop_scheduler()
     try:
         await event_bus.disconnect()
         logger.info("[Lifespan] EventBus desconectado.")
@@ -346,17 +457,173 @@ def _trace_task(
     _sync_service_request(task_id)
 
 
+def _save_task_report(task_id: str, team: str, output: str) -> str | None:
+    """Persiste o output final em disco em GENERATED_PROJECTS_ROOT/<task_id>/.
+    Retorna o caminho absoluto do relatório, ou None se falhar.
+    """
+    if not output.strip():
+        return None
+    try:
+        report_dir = GENERATED_PROJECTS_ROOT / task_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+
+        report_path = report_dir / "relatorio.md"
+        report_path.write_text(output, encoding="utf-8")
+
+        readme_path = report_dir / "README.md"
+        readme_path.write_text(
+            f"# Relatório Intel Scout — {task_id}\n\n"
+            f"**Gerado por:** IRIS AI Office System — Time {team.upper()}  \n"
+            f"**Data:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            "## Como usar este relatório\n\n"
+            "1. Leia `relatorio.md` para a análise completa dos agentes IRIS\n"
+            "2. Use a seção **Top Projetos** para priorizar integrações\n"
+            "3. Apresente o conteúdo de **Potencial Comercial** para stakeholders\n"
+            "4. Para implementação técnica, encaminhe ao Time DEV via Command Center\n\n"
+            "## Estrutura dos arquivos\n\n"
+            "| Arquivo | Conteúdo |\n"
+            "|---------|----------|\n"
+            "| `relatorio.md` | Análise completa + subtarefas executadas pelos agentes |\n"
+            "| `README.md` | Este arquivo — instruções de uso |\n\n"
+            "## Como executar / reproduzir\n\n"
+            "Este relatório foi gerado automaticamente pelo agente SCOUT-01 do IRIS.\n"
+            "Para gerar um novo relatório atualizado:\n\n"
+            "```bash\n"
+            "# 1. Abrir IRIS\n"
+            "IRIS.bat\n\n"
+            "# 2. Navegar para: Intel Hub → aba Intel Scout\n"
+            "# 3. Clicar em 'Raspar Agora' para atualizar os findings\n"
+            "# 4. Clicar em '⚡ Insights' → selecionar categoria → 'Executar com Agentes IRIS'\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+        logger.info("[Report] Relatório salvo em: %s", report_path)
+        return str(report_path)
+    except Exception as exc:
+        logger.warning("[Report] Falha ao salvar relatório para %s: %s", task_id, exc)
+        return None
+
+
+async def _github_upload_file(
+    client: httpx.AsyncClient,
+    owner: str,
+    repo: str,
+    path: str,
+    content_bytes: bytes,
+    message: str,
+) -> bool:
+    """Faz upload de um arquivo via GitHub Contents API. Atualiza se já existir."""
+    import base64
+    encoded = base64.b64encode(content_bytes).decode()
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    # Verifica SHA existente para update
+    check = await client.get(url)
+    payload: dict = {"message": message, "content": encoded}
+    if check.status_code == 200:
+        payload["sha"] = check.json().get("sha", "")
+    resp = await client.put(url, json=payload)
+    if resp.status_code not in (200, 201):
+        logger.warning("[GitHub] upload %s → %s: %s", path, resp.status_code, resp.text[:200])
+        return False
+    return True
+
+
+async def _push_project_to_github(task_id: str, project_dir: Path) -> str | None:
+    """
+    Publica os artefatos do relatório Intel Scout no repositório ai-office-system
+    via GitHub Contents API (não requer criação de novo repo).
+
+    Diretório no repo: intel-scout-reports/<task_id>/
+    Retorna a URL da pasta no GitHub ou None em caso de falha.
+    """
+    if not settings.GITHUB_TOKEN:
+        return None
+    if not project_dir.exists():
+        return None
+
+    owner = settings.GITHUB_DEFAULT_ORG or settings.GITHUB_USERNAME
+    repo = "ai-office-system"
+    base_path = f"intel-scout-reports/{task_id}"
+    commit_msg = f"feat(intel-scout): relatório de análise {task_id[:8]}"
+
+    headers = {
+        "Authorization": f"token {settings.GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=30) as client:
+            uploaded = 0
+            for filename in ("relatorio.md", "README.md"):
+                file_path = project_dir / filename
+                if not file_path.exists():
+                    continue
+                ok = await _github_upload_file(
+                    client, owner, repo,
+                    f"{base_path}/{filename}",
+                    file_path.read_bytes(),
+                    commit_msg,
+                )
+                if ok:
+                    uploaded += 1
+
+            if uploaded == 0:
+                logger.warning("[GitHub] Nenhum arquivo publicado para %s.", task_id)
+                return None
+
+            github_url = f"https://github.com/{owner}/{repo}/tree/main/{base_path}"
+            logger.info("[GitHub] %d arquivo(s) publicados: %s", uploaded, github_url)
+            return github_url
+    except Exception as exc:
+        logger.warning("[GitHub] _push_project_to_github falhou para %s: %s", task_id, exc)
+    return None
+
+
+async def _push_iris_repo_to_github() -> bool:
+    """
+    Faz push do repositório IRIS local (ai-office-system) para o GitHub.
+    Chamada após tarefas DEV que modificam o próprio código da plataforma.
+    Retorna True se o push teve sucesso.
+    """
+    if not settings.GITHUB_TOKEN:
+        return False
+    try:
+        from backend.core.gold_standard import REPO_ROOT
+        safe_token = quote(settings.GITHUB_TOKEN, safe="")
+        owner = settings.GITHUB_DEFAULT_ORG or settings.GITHUB_USERNAME
+        push_url = f"https://x-access-token:{safe_token}@github.com/{owner}/ai-office-system.git"
+
+        result = subprocess.run(
+            ["git", "push", push_url, "HEAD:main"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        if result.returncode == 0:
+            logger.info("[GitHub] Push do IRIS realizado.")
+            return True
+        logger.warning("[GitHub] Push IRIS falhou: %s", (result.stderr or "")[:300])
+    except Exception as exc:
+        logger.warning("[GitHub] _push_iris_repo_to_github falhou: %s", exc)
+    return False
+
+
 def _make_progress_callback(task_id: str):
-    """Returns a callback that updates _active_tasks with intermediate state."""
+    """Returns a callback that updates _active_tasks with intermediate state (thread-safe)."""
     def _on_progress(intermediate_state):
-        if task_id in _active_tasks:
-            # Merge only the fields that changed
+        with _tasks_lock:
+            if task_id not in _active_tasks:
+                return
             for key in ("senior_directive", "subtasks", "current_subtask_index",
                         "agent_outputs", "delivery_evidence", "delivery_manifests",
                         "quality_approved", "final_output", "errors"):
                 if key in intermediate_state and intermediate_state[key] is not None:
                     _active_tasks[task_id][key] = intermediate_state[key]
-            _sync_service_request(task_id)
+        _sync_service_request(task_id)
     return _on_progress
 
 
@@ -387,16 +654,28 @@ async def _run_dev_task(task_id: str, request: str, priority: int):
         final_state = await orchestrator.run(
             state, on_progress=_make_progress_callback(task_id)
         )
-        _active_tasks[task_id] = final_state
+        report_path = _save_task_report(task_id, "dev", final_state.get("final_output") or "")
+        if report_path:
+            final_state["report_path"] = report_path
+            github_url = await _push_project_to_github(task_id, GENERATED_PROJECTS_ROOT / task_id)
+            if github_url:
+                final_state["github_url"] = github_url
+        # Push IRIS local repo se houve commits aprovados (tarefas de melhoria da plataforma)
+        manifests = final_state.get("delivery_manifests") or {}
+        if any(m.get("approved") for m in manifests.values()):
+            await _push_iris_repo_to_github()
+        with _tasks_lock:
+            _active_tasks[task_id] = final_state
         _sync_service_request(task_id)
         _trace_task(task_id, "dev", "runtime_complete", "Execucao da tarefa encerrada com retorno do orquestrador.", agent_id="orchestrator_senior_01", agent_role="orchestrator")
         logger.info(f"[DevTask] Task {task_id} concluída. "
                     f"Output: {len(final_state.get('final_output') or '')} chars.")
     except Exception as exc:
         logger.error(f"[DevTask] Erro na task {task_id}: {exc}", exc_info=True)
-        if task_id in _active_tasks:
-            _active_tasks[task_id]["errors"].append(str(exc))
-            _sync_service_request(task_id)
+        with _tasks_lock:
+            if task_id in _active_tasks:
+                _active_tasks[task_id]["errors"].append(str(exc))
+        _sync_service_request(task_id)
         _trace_task(task_id, "dev", "runtime_error", f"Falha no runtime dev: {exc}", level="error", agent_id="orchestrator_senior_01", agent_role="orchestrator")
 
 
@@ -412,16 +691,24 @@ async def _run_marketing_task(task_id: str, request: str, priority: int):
         final_state = await orchestrator.run(
             state, on_progress=_make_progress_callback(task_id)
         )
-        _active_tasks[task_id] = final_state
+        report_path = _save_task_report(task_id, "marketing", final_state.get("final_output") or "")
+        if report_path:
+            final_state["report_path"] = report_path
+            github_url = await _push_project_to_github(task_id, GENERATED_PROJECTS_ROOT / task_id)
+            if github_url:
+                final_state["github_url"] = github_url
+        with _tasks_lock:
+            _active_tasks[task_id] = final_state
         _sync_service_request(task_id)
         _trace_task(task_id, "marketing", "runtime_complete", "Execucao da tarefa encerrada com retorno do orquestrador.", agent_id="orchestrator_senior_01", agent_role="orchestrator")
         logger.info(f"[MarketingTask] Task {task_id} concluída. "
                     f"Output: {len(final_state.get('final_output') or '')} chars.")
     except Exception as exc:
         logger.error(f"[MarketingTask] Erro na task {task_id}: {exc}", exc_info=True)
-        if task_id in _active_tasks:
-            _active_tasks[task_id]["errors"].append(str(exc))
-            _sync_service_request(task_id)
+        with _tasks_lock:
+            if task_id in _active_tasks:
+                _active_tasks[task_id]["errors"].append(str(exc))
+        _sync_service_request(task_id)
         _trace_task(task_id, "marketing", "runtime_error", f"Falha no runtime marketing: {exc}", level="error", agent_id="orchestrator_senior_01", agent_role="orchestrator")
 
 
@@ -436,7 +723,9 @@ async def _enqueue_team_task(
     team_value = team.value
 
     state = _make_task_state(task_id, team_value, request, priority)
-    _active_tasks[task_id] = state
+    with _tasks_lock:
+        _active_tasks[task_id] = state
+    _cleanup_completed_tasks()
     _trace_task(task_id, team_value, "task_created", "Tarefa enfileirada para execucao.", agent_id="orchestrator_senior_01", agent_role="orchestrator", metadata={"priority": priority})
     await _emit_task_created(task_id, team, request, priority)
 
@@ -453,20 +742,26 @@ async def _enqueue_team_task(
 # Routes — Tasks
 # ---------------------------------------------------------------------------
 @app.post("/tasks/dev", response_model=TaskResponse, status_code=202)
-async def create_dev_task(body: TaskRequest, background_tasks: BackgroundTasks):
+async def create_dev_task(request: Request, body: TaskRequest, background_tasks: BackgroundTasks):
     """
     Cria uma nova tarefa para o time de Dev.
     Dispara DevOrchestrator em background e retorna imediatamente.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Muitas requisições. Tente novamente em 1 minuto.")
     return await _enqueue_team_task(TeamType.DEV, body.request, body.priority, background_tasks)
 
 
 @app.post("/tasks/marketing", response_model=TaskResponse, status_code=202)
-async def create_marketing_task(body: TaskRequest, background_tasks: BackgroundTasks):
+async def create_marketing_task(request: Request, body: TaskRequest, background_tasks: BackgroundTasks):
     """
     Cria uma nova tarefa para o time de Marketing.
     Dispara MarketingOrchestrator em background e retorna imediatamente.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Muitas requisições. Tente novamente em 1 minuto.")
     return await _enqueue_team_task(TeamType.MARKETING, body.request, body.priority, background_tasks)
 
 
@@ -477,6 +772,36 @@ async def get_task(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' não encontrada.")
     return task
+
+
+@app.get("/tasks/{task_id}/report")
+async def get_task_report(task_id: str):
+    """Retorna o relatório gerado em disco pelo orchestrator para a task."""
+    task = _active_tasks.get(task_id)
+    report_path_str = task.get("report_path") if task else None
+    github_url = task.get("github_url") if task else None
+
+    if not report_path_str:
+        candidate = GENERATED_PROJECTS_ROOT / task_id / "relatorio.md"
+        if candidate.exists():
+            report_path_str = str(candidate)
+
+    if not report_path_str:
+        return {"exists": False, "path": None, "content": None, "task_id": task_id, "github_url": github_url}
+
+    report_path = Path(report_path_str)
+    if not report_path.exists():
+        return {"exists": False, "path": report_path_str, "content": None, "task_id": task_id, "github_url": github_url}
+
+    content = report_path.read_text(encoding="utf-8", errors="replace")
+    return {
+        "exists": True,
+        "path": report_path_str,
+        "content": content,
+        "task_id": task_id,
+        "size_chars": len(content),
+        "github_url": github_url,
+    }
 
 
 @app.get("/tasks/{task_id}/execution-log", response_model=ExecutionLogResponse)
@@ -530,8 +855,11 @@ async def get_delivery_audit_endpoint(task_id: str):
 
 
 @app.post("/service-requests", response_model=ServiceRequestResponse, status_code=202)
-async def create_service_request(body: ServiceRequestCreate, background_tasks: BackgroundTasks):
+async def create_service_request(request: Request, body: ServiceRequestCreate, background_tasks: BackgroundTasks):
     """Cria uma solicitação formal para um time e já a liga ao runtime do escritório."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Muitas requisições. Tente novamente em 1 minuto.")
     team_value = body.team.lower().strip()
     if team_value not in {"dev", "marketing"}:
         raise HTTPException(status_code=400, detail="team deve ser 'dev' ou 'marketing'.")
@@ -906,6 +1234,102 @@ async def mark_handoff_resolved(handoff_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail=f"Handoff '{handoff_id}' não encontrado.")
     return {"status": "resolved", "handoff_id": handoff_id}
+
+
+# ---------------------------------------------------------------------------
+# Research / Intel — SCOUT endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/research/findings", response_model=ResearchFindingsResponse)
+async def get_research_findings(
+    source: str | None = None,
+    min_score: int = 0,
+    grade: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """
+    Retorna os findings do agente SCOUT.
+    Filtrável por source (github, huggingface, huggingface_space, combination),
+    min_score e grade (S/A/B/C/D).
+    """
+    result = research_store.get_findings(
+        source=source,
+        min_score=min_score,
+        grade=grade,
+        limit=limit,
+        offset=offset,
+    )
+    return result
+
+
+@app.get("/research/stats", response_model=ResearchStatsResponse)
+async def get_research_stats():
+    """Estatísticas agregadas dos findings (por fonte, grade, score médio)."""
+    return research_store.get_stats()
+
+
+@app.get("/research/schedule", response_model=ResearchScheduleConfig)
+async def get_research_schedule():
+    """Retorna a configuração atual de agendamento do SCOUT."""
+    return research_store.get_config()
+
+
+@app.patch("/research/schedule", response_model=ResearchScheduleConfig)
+async def update_research_schedule(body: ResearchScheduleUpdate):
+    """Atualiza a configuração de agendamento do SCOUT."""
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nenhum campo para atualizar.")
+    config = research_store.update_config(updates)
+    return config
+
+
+@app.post("/research/scrape", response_model=ResearchScrapeResponse)
+async def trigger_research_scrape(background_tasks: BackgroundTasks):
+    """
+    Dispara uma raspagem imediata do SCOUT (GitHub + HuggingFace).
+    Executa em background para não bloquear a resposta.
+    """
+    status = research_store.get_scheduler_status()
+    if status.get("running"):
+        return ResearchScrapeResponse(
+            status="already_running",
+            message="Raspagem já em andamento. Aguarde a conclusão.",
+        )
+
+    async def _emit_research_event(event_type: str, payload: dict) -> None:
+        from backend.core.event_types import AgentRole, TeamType
+        event = OfficialEvent(
+            event_type=EventType.RESEARCH_STARTED if event_type == "research_started" else EventType.RESEARCH_COMPLETED,
+            team=TeamType.INTEL,
+            agent_id="intel_scout_01",
+            agent_role=AgentRole.SCOUT,
+            payload=payload,
+        )
+        try:
+            await event_bus.emit(event)
+        except Exception as exc:
+            logger.warning(f"[Research] Falha ao emitir evento {event_type}: {exc}")
+
+    background_tasks.add_task(research_store.run_scrape, _emit_research_event)
+    return ResearchScrapeResponse(
+        status="started",
+        message="Raspagem iniciada em background. Resultados disponíveis em /research/findings.",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+@app.get("/research/scheduler/status")
+async def get_research_scheduler_status():
+    """Status do scheduler de pesquisa (ativo, último run, próximo run)."""
+    return research_store.get_scheduler_status()
+
+
+@app.get("/research/insights")
+async def get_research_insights():
+    """Gera insights de melhoria baseados nos findings do SCOUT."""
+    return research_store.generate_insights()
 
 
 # ---------------------------------------------------------------------------
