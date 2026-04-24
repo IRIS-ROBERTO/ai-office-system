@@ -1288,7 +1288,7 @@ async def update_research_schedule(body: ResearchScheduleUpdate):
 @app.post("/research/scrape", response_model=ResearchScrapeResponse)
 async def trigger_research_scrape(background_tasks: BackgroundTasks):
     """
-    Dispara uma raspagem imediata do SCOUT (GitHub + HuggingFace).
+    Dispara uma raspagem imediata do SCOUT (GitHub + GitLab + HuggingFace).
     Executa em background para não bloquear a resposta.
     """
     status = research_store.get_scheduler_status()
@@ -1330,6 +1330,21 @@ async def get_research_scheduler_status():
 async def get_research_insights():
     """Gera insights de melhoria baseados nos findings do SCOUT."""
     return research_store.generate_insights()
+
+
+@app.post("/research/insights/{category_id}/promote")
+async def promote_research_insight(category_id: str):
+    """Promove uma categoria de insight para plano versionado e commitado."""
+    try:
+        result = research_store.promote_insight(category_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Insight '{category_id}' não encontrado.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Falha ao promover insight: {exc}")
+
+    pushed = await _push_iris_repo_to_github()
+    result["pushed_to_github"] = pushed
+    return result
 
 
 # ---------------------------------------------------------------------------

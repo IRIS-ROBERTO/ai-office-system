@@ -643,7 +643,7 @@ class BaseOrchestrator(ABC):
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
                 team=self.team.value,
-                require_commit=(self.team.value == "dev"),
+                require_commit=self._subtask_requires_commit(subtask),
             )
             updated_manifests[subtask["id"]] = manifest.to_dict()
             self._trace(
@@ -743,7 +743,7 @@ class BaseOrchestrator(ABC):
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
                 team=self.team.value,
-                require_commit=(self.team.value == "dev"),
+                require_commit=self._subtask_requires_commit(subtask),
             )
             updated_manifests[subtask["id"]] = manifest.to_dict()
             self._trace(
@@ -998,7 +998,7 @@ class BaseOrchestrator(ABC):
             agent_id=agent_id,
             agent_role=agent_role_enum.value,
             team=self.team.value,
-            require_commit=(self.team.value == "dev"),
+            require_commit=self._subtask_requires_commit(subtask),
         )
         updated_manifests[subtask["id"]] = manifest.to_dict()
         self._trace(
@@ -1203,7 +1203,7 @@ class BaseOrchestrator(ABC):
             output_text,
             task_id=task_id,
             subtask_id=subtask["id"],
-            require_commit=(self.team.value == "dev"),
+            require_commit=self._subtask_requires_commit(subtask),
         )
         if not deterministic_gate.approved:
             retry_count = state.get("retry_count", 0) + 1
@@ -1703,6 +1703,48 @@ class BaseOrchestrator(ABC):
     # ------------------------------------------------------------------
     # Helpers for subclasses
     # ------------------------------------------------------------------
+
+    def _subtask_requires_commit(self, subtask: dict) -> bool:
+        """Versionable work must leave a verifiable local commit, in any team."""
+        source = " ".join(
+            str(subtask.get(key) or "")
+            for key in ("title", "description", "acceptance_criteria", "assigned_role")
+        ).lower()
+
+        non_versionable_markers = (
+            "not_applicable_commit",
+            "sem arquivo",
+            "sem artefato",
+            "apenas resposta",
+            "somente resposta",
+            "consulta verbal",
+        )
+        if any(marker in source for marker in non_versionable_markers):
+            return False
+
+        versionable_markers = (
+            "arquivo",
+            "artefato",
+            "documento",
+            "relatorio",
+            "relatório",
+            "planilha",
+            "calendario",
+            "calendário",
+            "copy",
+            "brief",
+            "campanha",
+            "seo",
+            "codigo",
+            "código",
+            "html",
+            "api",
+            "commit",
+            "github_commit",
+            "workspace_file",
+            "delivery_evidence",
+        )
+        return self.team.value == "dev" or any(marker in source for marker in versionable_markers)
 
     def _available_roles(self) -> str:
         if self.team == TeamType.DEV:

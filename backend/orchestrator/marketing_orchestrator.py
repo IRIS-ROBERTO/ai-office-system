@@ -39,7 +39,9 @@ _MKT_CONTEXT = (
     "'100 palavras-chave mapeadas', '30 posts planejados').\n"
     "3. Cada subtarefa deve produzir um artefato concreto: documento, planilha, "
     "calendário, relatório ou copy pronto para publicação.\n"
-    "4. Analytics deve validar toda estratégia com dados antes de executar."
+    "4. Analytics deve validar toda estratégia com dados antes de executar.\n"
+    "5. Artefatos versionáveis de marketing seguem o mesmo padrão de engenharia: "
+    "workspace_file, validação objetiva, github_commit e DELIVERY_EVIDENCE com SHA real."
 )
 
 

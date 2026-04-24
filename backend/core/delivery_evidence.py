@@ -17,6 +17,13 @@ from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 
 
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)
+_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")),
+    ("openai_key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b")),
+    ("supabase_secret", re.compile(r"\bsb_secret_[A-Za-z0-9_-]{12,}\b", re.IGNORECASE)),
+    ("bearer_token", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b", re.IGNORECASE)),
+)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ALLOWED_REPO_ROOTS = (_REPO_ROOT, GENERATED_PROJECTS_ROOT)
 
@@ -140,6 +147,9 @@ def validate_delivery_evidence(
         missing = _files_missing_from_commit(evidence.commit_sha, evidence.files_changed, repo_root)
         if missing:
             issues.append("files_changed ausentes do commit: " + ", ".join(missing))
+        secret_hits = _secret_hits_in_commit(evidence.commit_sha, repo_root)
+        if secret_hits:
+            issues.append("possivel segredo no commit: " + ", ".join(secret_hits))
 
     if evidence.task_id and evidence.task_id != task_id:
         issues.append(f"task_id divergente: {evidence.task_id}")
@@ -197,6 +207,33 @@ def _files_missing_from_commit(sha: str, files_changed: list[str], repo_root: Pa
     expected = {_normalize_file_for_repo(item, repo_root) for item in files_changed if item.strip()}
     expected.discard("")
     return sorted(expected - committed)
+
+
+def _secret_hits_in_commit(sha: str, repo_root: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "show", "--format=", "--unified=0", sha.strip()],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return ["secret_scan_unavailable"]
+
+    added_lines = [
+        line[1:]
+        for line in result.stdout.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    hits: set[str] = set()
+    for line in added_lines:
+        for label, pattern in _SECRET_PATTERNS:
+            if pattern.search(line):
+                hits.add(label)
+    return sorted(hits)
 
 
 def _resolve_evidence_repo_root(evidence: DeliveryEvidence) -> tuple[Path | None, str | None]:

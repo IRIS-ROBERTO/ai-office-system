@@ -155,17 +155,22 @@ class WorkspaceTool(BaseTool):
         root = self._resolve_project_root(project_path) if project_path else self._discover_git_root(paths)
         normalized: list[str] = []
         for item in paths:
-            safe = self._resolve_safe_path(item)
+            safe = self._resolve_safe_path(item, base_root=root if project_path else None)
             normalized.append(str(safe.relative_to(root)).replace("\\", "/"))
         return root, normalized
 
     def _normalize_many(self, paths: list[str], project_path: Optional[str] = None) -> list[str]:
         return self._root_and_normalized(paths, project_path)[1]
 
-    def _resolve_safe_path(self, path: str) -> Path:
+    def _resolve_safe_path(self, path: str, *, base_root: Optional[Path] = None) -> Path:
         normalized = path.replace("\\", "/").strip()
         candidate = Path(normalized).expanduser()
-        target = candidate.resolve() if candidate.is_absolute() else (REPO_ROOT / normalized.lstrip("/")).resolve()
+        if candidate.is_absolute():
+            target = candidate.resolve()
+        elif base_root is not None:
+            target = (base_root / normalized.lstrip("/")).resolve()
+        else:
+            target = (REPO_ROOT / normalized.lstrip("/")).resolve()
 
         if not self._is_allowed_root(target):
             generated_candidate = (GENERATED_PROJECTS_ROOT / normalized.lstrip("/")).resolve()

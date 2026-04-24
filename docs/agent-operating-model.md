@@ -30,6 +30,10 @@ O problema central é operacional:
 6. Nenhuma animação visual pode representar uma ação que não ocorreu no runtime.
 7. Nenhum projeto grande pode ser reduzido a uma única subtarefa genérica.
 
+O padrão de maturidade alvo está formalizado em `docs/phd-engineering-agent-standard.md`.
+Ele estende estes princípios para Dev e Marketing: qualquer artefato versionável precisa
+passar por evidência, validação, commit verificável e varredura de segredos.
+
 ## 3. Definition of Done Obrigatório
 
 Toda subtarefa deve terminar com um bloco de evidência:

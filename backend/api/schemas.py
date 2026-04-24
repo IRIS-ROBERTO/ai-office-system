@@ -7,8 +7,8 @@ from typing import Optional
 
 
 class TaskRequest(BaseModel):
-    request: str
-    priority: int = 1
+    request: str = Field(..., min_length=10, max_length=10000)
+    priority: int = Field(default=1, ge=1, le=4)
 
 
 class TaskResponse(BaseModel):
@@ -156,14 +156,14 @@ class ProductionReadinessResponse(BaseModel):
 
 
 class ServiceRequestCreate(BaseModel):
-    title: str
-    team: str
-    request: str
-    requester_name: Optional[str] = None
-    requester_team: Optional[str] = None
-    urgency: str = "medium"
-    desired_due_date: Optional[str] = None
-    acceptance_criteria: Optional[str] = None
+    title: str = Field(..., min_length=3, max_length=200)
+    team: str = Field(..., pattern="^(dev|marketing|Dev|Marketing|DEV|MARKETING)$")
+    request: str = Field(..., min_length=10, max_length=10000)
+    requester_name: Optional[str] = Field(default=None, max_length=100)
+    requester_team: Optional[str] = Field(default=None, max_length=100)
+    urgency: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
+    desired_due_date: Optional[str] = Field(default=None, max_length=30)
+    acceptance_criteria: Optional[str] = Field(default=None, max_length=5000)
 
 
 class ServiceRequestResponse(BaseModel):
@@ -211,3 +211,98 @@ class ExecutionLogResponse(BaseModel):
     task_id: str
     items: list[ExecutionLogEntryResponse]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# Research / Intel schemas
+# ---------------------------------------------------------------------------
+
+class ResearchFinding(BaseModel):
+    id: str
+    source: str = "combination"
+    name: str = ""
+    title: str
+    description: str = ""
+    url: str = ""
+    language: str = "N/A"
+    license: str = "N/A"
+    score: int
+    grade: str
+    grade_label: str
+    breakdown: dict = Field(default_factory=dict)
+    iris_fit: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    stars: int = 0
+    forks: int = 0
+    downloads: int = 0
+    likes: int = 0
+    pipeline_tag: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    pushed_at: str = ""
+    scraped_at: str = ""
+    query_used: str = ""
+    # Campos específicos de combinação
+    type: str = "project"
+    projects: list[str] = Field(default_factory=list)
+    project_names: list[str] = Field(default_factory=list)
+    combination_rationale: str = ""
+
+
+class ResearchFindingsResponse(BaseModel):
+    total: int
+    returned: int
+    items: list[ResearchFinding]
+    last_updated: Optional[str] = None
+
+
+class ResearchStatsResponse(BaseModel):
+    total: int
+    by_source: dict
+    by_grade: dict
+    avg_score: float
+    top_finding: Optional[dict] = None
+
+
+class ResearchScheduleConfig(BaseModel):
+    enabled: bool = True
+    github_enabled: bool = True
+    gitlab_enabled: bool = True
+    huggingface_enabled: bool = True
+    interval_hours: int = 6
+    scrape_time: str = "08:00"
+    github_queries: list[str] = Field(default_factory=list)
+    gitlab_queries: list[str] = Field(default_factory=list)
+    hf_queries: list[str] = Field(default_factory=list)
+    min_stars_github: int = 50
+    min_stars_gitlab: int = 25
+    days_back: int = 30
+    last_run: Optional[str] = None
+    next_run: Optional[str] = None
+    total_runs: int = 0
+
+
+class ResearchScheduleUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    github_enabled: Optional[bool] = None
+    gitlab_enabled: Optional[bool] = None
+    huggingface_enabled: Optional[bool] = None
+    interval_hours: Optional[int] = None
+    scrape_time: Optional[str] = None
+    github_queries: Optional[list[str]] = None
+    gitlab_queries: Optional[list[str]] = None
+    hf_queries: Optional[list[str]] = None
+    min_stars_github: Optional[int] = None
+    min_stars_gitlab: Optional[int] = None
+    days_back: Optional[int] = None
+
+
+class ResearchScrapeResponse(BaseModel):
+    status: str
+    message: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    new_findings: int = 0
+    total_findings: int = 0
+    error: str = ""

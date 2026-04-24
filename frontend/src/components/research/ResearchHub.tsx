@@ -50,12 +50,15 @@ type Stats = {
 type ScheduleConfig = {
   enabled: boolean;
   github_enabled: boolean;
+  gitlab_enabled: boolean;
   huggingface_enabled: boolean;
   interval_hours: number;
   scrape_time: string;
   github_queries: string[];
+  gitlab_queries: string[];
   hf_queries: string[];
   min_stars_github: number;
+  min_stars_gitlab: number;
   days_back: number;
   last_run: string | null;
   next_run: string | null;
@@ -143,6 +146,7 @@ function gradeColor(grade: string): string {
 function sourceLabel(source: string): string {
   switch (source) {
     case 'github':           return 'GitHub';
+    case 'gitlab':           return 'GitLab';
     case 'huggingface':      return 'HuggingFace';
     case 'huggingface_space':return 'HF Space';
     case 'combination':      return 'Combinação';
@@ -153,6 +157,7 @@ function sourceLabel(source: string): string {
 function sourceColor(source: string): string {
   switch (source) {
     case 'github':           return '#f0f6ff';
+    case 'gitlab':           return '#fc6d26';
     case 'huggingface':      return '#fbbf24';
     case 'huggingface_space':return '#f97316';
     case 'combination':      return '#a78bfa';
@@ -390,12 +395,15 @@ const SchedulePanel: React.FC<{
         body: JSON.stringify({
           enabled: form.enabled,
           github_enabled: form.github_enabled,
+          gitlab_enabled: form.gitlab_enabled,
           huggingface_enabled: form.huggingface_enabled,
           interval_hours: form.interval_hours,
           scrape_time: form.scrape_time,
           min_stars_github: form.min_stars_github,
+          min_stars_gitlab: form.min_stars_gitlab,
           days_back: form.days_back,
           github_queries: form.github_queries,
+          gitlab_queries: form.gitlab_queries,
           hf_queries: form.hf_queries,
         }),
       });
@@ -423,7 +431,7 @@ const SchedulePanel: React.FC<{
           SCOUT-01
         </div>
         <div style={{ marginTop: 4, fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
-          Especialista em inteligência técnica — raspa GitHub e HuggingFace em busca de projetos altamente promissores.
+          Especialista em inteligência técnica — raspa GitHub, GitLab e HuggingFace em busca de projetos altamente promissores.
         </div>
 
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -473,6 +481,11 @@ const SchedulePanel: React.FC<{
           onChange={(v) => setForm((f) => ({ ...f, github_enabled: v }))}
         />
         <ToggleRow
+          label="GitLab"
+          value={form.gitlab_enabled ?? true}
+          onChange={(v) => setForm((f) => ({ ...f, gitlab_enabled: v }))}
+        />
+        <ToggleRow
           label="HuggingFace"
           value={form.huggingface_enabled ?? true}
           onChange={(v) => setForm((f) => ({ ...f, huggingface_enabled: v }))}
@@ -509,10 +522,19 @@ const SchedulePanel: React.FC<{
               style={inputStyle}
             />
           </div>
+          <div>
+            <label style={labelStyle}>Stars mínimas (GitLab)</label>
+            <input
+              type="number" min={0}
+              value={form.min_stars_gitlab ?? 25}
+              onChange={(e) => setForm((f) => ({ ...f, min_stars_gitlab: Number(e.target.value) }))}
+              style={inputStyle}
+            />
+          </div>
         </div>
 
         <div>
-          <label style={labelStyle}>Dias para trás (GitHub)</label>
+          <label style={labelStyle}>Dias para trás</label>
           <input
             type="number" min={7} max={365}
             value={form.days_back ?? 30}
@@ -529,6 +551,16 @@ const SchedulePanel: React.FC<{
             value={(form.github_queries ?? []).join('\n')}
             onChange={(e) => setForm((f) => ({ ...f, github_queries: e.target.value.split('\n').filter(Boolean) }))}
             style={{ ...inputStyle, resize: 'vertical', minHeight: 100 }}
+          />
+        </div>
+
+        <div>
+          <label style={labelStyle}>Queries GitLab (uma por linha)</label>
+          <textarea
+            rows={4}
+            value={(form.gitlab_queries ?? []).join('\n')}
+            onChange={(e) => setForm((f) => ({ ...f, gitlab_queries: e.target.value.split('\n').filter(Boolean) }))}
+            style={{ ...inputStyle, resize: 'vertical', minHeight: 80 }}
           />
         </div>
 
@@ -618,7 +650,7 @@ function buildTaskPrompt(cat: InsightCategory): string {
 
 ## Contexto Estratégico
 ${cat.description}
-Total de ${cat.total_found} projetos identificados pelo agente SCOUT-01 (Intel Hub) via raspagem GitHub + HuggingFace.
+Total de ${cat.total_found} projetos identificados pelo agente SCOUT-01 (Intel Hub) via raspagem GitHub + GitLab + HuggingFace.
 
 ## Diretriz Principal
 ${cat.recommendation}
@@ -868,6 +900,8 @@ const InsightsModal: React.FC<{
   onClose: () => void;
 }> = ({ data, apiUrl, onClose }) => {
   const [executing, setExecuting] = useState<string | null>(null);
+  const [promoting, setPromoting] = useState<string | null>(null);
+  const [promotionResult, setPromotionResult] = useState<Record<string, string>>({});
   const [executions, setExecutions] = useState<Record<string, CategoryExecution>>({});
   const [selected, setSelected] = useState<string>(data.insights[0]?.category_id ?? '');
 
@@ -957,6 +991,26 @@ const InsightsModal: React.FC<{
       },
     }));
     setExecuting(null);
+  };
+
+  const handlePromote = async (cat: InsightCategory) => {
+    setPromoting(cat.category_id);
+    try {
+      const resp = await fetch(`${apiUrl}/research/insights/${cat.category_id}/promote`, { method: 'POST' });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(json?.detail || `Falha HTTP ${resp.status}`);
+      setPromotionResult(prev => ({
+        ...prev,
+        [cat.category_id]: `Commit ${json.commit_sha} · ${json.repo_relative_path}${json.pushed_to_github ? ' · GitHub atualizado' : ''}`,
+      }));
+    } catch (e) {
+      setPromotionResult(prev => ({
+        ...prev,
+        [cat.category_id]: `Falha ao promover: ${e instanceof Error ? e.message : 'erro desconhecido'}`,
+      }));
+    } finally {
+      setPromoting(null);
+    }
   };
 
   if (!cat) return null;
@@ -1213,9 +1267,30 @@ const InsightsModal: React.FC<{
               >
                 {isExec ? '⏳ Enviando...' : dispatched ? '↻ Re-executar Agentes' : '▶ Executar com Agentes IRIS'}
               </button>
+              <button
+                type="button"
+                onClick={() => handlePromote(cat)}
+                disabled={promoting === cat.category_id}
+                style={{
+                  padding: '14px 20px', borderRadius: 16,
+                  border: `1px solid ${cat.color}34`,
+                  background: `${cat.color}12`,
+                  color: cat.color,
+                  fontWeight: 800, fontSize: 13, letterSpacing: 0.4,
+                  cursor: promoting === cat.category_id ? 'wait' : 'pointer',
+                  transition: 'all 0.2s', whiteSpace: 'nowrap',
+                }}
+              >
+                {promoting === cat.category_id ? 'Commitando...' : 'Promover + Commit'}
+              </button>
               {dispatched && !isExec && (
                 <div style={{ marginTop: 8, fontSize: 10, color: '#60a5fa', textAlign: 'center' }}>
                   DEV · MKT em execução ↓
+                </div>
+              )}
+              {promotionResult[cat.category_id] && (
+                <div style={{ marginTop: 8, fontSize: 10, color: cat.color, textAlign: 'center', maxWidth: 360 }}>
+                  {promotionResult[cat.category_id]}
                 </div>
               )}
             </div>
@@ -1414,7 +1489,7 @@ const InsightsModal: React.FC<{
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 
-const SOURCES = ['all', 'github', 'huggingface', 'huggingface_space', 'combination'] as const;
+const SOURCES = ['all', 'github', 'gitlab', 'huggingface', 'huggingface_space', 'combination'] as const;
 const GRADES  = ['all', 'S', 'A', 'B', 'C', 'D'] as const;
 
 const ResearchHub: React.FC<Props> = ({ apiUrl }) => {
@@ -1578,9 +1653,10 @@ const ResearchHub: React.FC<Props> = ({ apiUrl }) => {
 
           {/* Stats */}
           {stats && (
-            <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 10 }}>
+            <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 10 }}>
               <StatCard label="Total" value={stats.total} />
               <StatCard label="GitHub" value={stats.by_source.github ?? 0} color="#f0f6ff" />
+              <StatCard label="GitLab" value={stats.by_source.gitlab ?? 0} color="#fc6d26" />
               <StatCard label="HuggingFace" value={(stats.by_source.huggingface ?? 0) + (stats.by_source.huggingface_space ?? 0)} color="#fbbf24" />
               <StatCard label="Combinações" value={stats.by_source.combination ?? 0} color="#a78bfa" />
               <StatCard label="Score médio" value={stats.avg_score} color={SCOUT_COLOR} />

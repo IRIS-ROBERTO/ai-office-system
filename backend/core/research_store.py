@@ -11,6 +11,8 @@ Responsabilidades:
 import asyncio
 import json
 import logging
+import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,12 +20,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _RUNTIME_DIR = Path(".runtime")
+_ROOT = Path(__file__).resolve().parents[2]
 _FINDINGS_FILE = _RUNTIME_DIR / "research_findings.json"
 _CONFIG_FILE = _RUNTIME_DIR / "research_schedule_config.json"
+_PROMOTED_INSIGHTS_DIR = _ROOT / "docs" / "research-insights"
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
     "github_enabled": True,
+    "gitlab_enabled": True,
     "huggingface_enabled": True,
     "interval_hours": 6,
     "scrape_time": "08:00",
@@ -48,7 +53,15 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "code generation",
         "reasoning",
     ],
+    "gitlab_queries": [
+        "ai agent",
+        "llm workflow",
+        "rag automation",
+        "developer tool ai",
+        "mcp agent",
+    ],
     "min_stars_github": 50,
+    "min_stars_gitlab": 25,
     "days_back": 30,
     "last_run": None,
     "next_run": None,
@@ -204,13 +217,14 @@ async def run_scrape(emit_event=None) -> dict[str, Any]:
 
     try:
         from backend.tools.github_research_tool import search_github_trending, analyze_combination_potential
+        from backend.tools.gitlab_research_tool import search_gitlab_projects
         from backend.tools.hf_research_tool import search_hf_models, search_hf_spaces
 
         config = _schedule_config
         new_findings: list[dict[str, Any]] = []
 
         if emit_event:
-            await emit_event("research_started", {"sources": ["github", "huggingface"]})
+            await emit_event("research_started", {"sources": _enabled_sources(config)})
 
         # GitHub scraping
         if config.get("github_enabled", True):
@@ -227,6 +241,17 @@ async def run_scrape(emit_event=None) -> dict[str, Any]:
             combos = await analyze_combination_potential(gh_findings)
             new_findings.extend(combos)
             logger.info(f"[ResearchStore] Combinações: {len(combos)} analisadas.")
+
+        # GitLab scraping
+        if config.get("gitlab_enabled", True):
+            logger.info("[ResearchStore] Iniciando raspagem GitLab...")
+            gitlab_findings = await search_gitlab_projects(
+                queries=config.get("gitlab_queries"),
+                min_stars=int(config.get("min_stars_gitlab", 25)),
+                days_back=int(config.get("days_back", 30)),
+            )
+            new_findings.extend(gitlab_findings)
+            logger.info(f"[ResearchStore] GitLab: {len(gitlab_findings)} projetos encontrados.")
 
         # HuggingFace scraping
         if config.get("huggingface_enabled", True):
@@ -260,7 +285,7 @@ async def run_scrape(emit_event=None) -> dict[str, Any]:
             await emit_event("research_completed", {
                 "total_findings": len(_findings),
                 "new_findings": len(new_findings),
-                "sources": ["github", "huggingface"],
+                "sources": _enabled_sources(config),
             })
 
         logger.info(f"[ResearchStore] Raspagem concluída: {len(_findings)} findings totais.")
@@ -277,6 +302,17 @@ async def run_scrape(emit_event=None) -> dict[str, Any]:
         return {"status": "failed", "error": str(exc), "started_at": started_at}
     finally:
         _is_running = False
+
+
+def _enabled_sources(config: dict[str, Any]) -> list[str]:
+    sources: list[str] = []
+    if config.get("github_enabled", True):
+        sources.append("github")
+    if config.get("gitlab_enabled", True):
+        sources.append("gitlab")
+    if config.get("huggingface_enabled", True):
+        sources.append("huggingface")
+    return sources
 
 
 def _score_product_potential(cat_id: str, top_findings: list[dict], count: int) -> dict:
@@ -709,6 +745,130 @@ def generate_insights() -> dict[str, Any]:
         "total_analyzed": len(_findings),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def promote_insight(category_id: str) -> dict[str, Any]:
+    """Create and commit an implementation brief for one generated insight."""
+    payload = generate_insights()
+    insight = next(
+        (item for item in payload.get("insights", []) if item.get("category_id") == category_id),
+        None,
+    )
+    if not insight:
+        raise KeyError(category_id)
+
+    _PROMOTED_INSIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    slug = _slugify(f"{category_id}-{insight.get('title', 'insight')}")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    relative_path = Path("docs") / "research-insights" / f"{stamp}-{slug}.md"
+    target = _ROOT / relative_path
+    target.write_text(_build_promoted_insight_markdown(insight, payload), encoding="utf-8")
+
+    commit_message = f"SCOUT: promote {category_id} insight"
+    commit_sha = _commit_file(relative_path, commit_message)
+    return {
+        "status": "promoted",
+        "category_id": category_id,
+        "path": str(target),
+        "repo_relative_path": str(relative_path).replace("\\", "/"),
+        "commit_message": commit_message,
+        "commit_sha": commit_sha,
+    }
+
+
+def _build_promoted_insight_markdown(insight: dict[str, Any], payload: dict[str, Any]) -> str:
+    top_projects = insight.get("top_projects") or []
+    summary = insight.get("summary") or {}
+    potential = insight.get("product_potential") or {}
+    project_lines = "\n".join(
+        f"{idx}. [{project.get('title') or project.get('name')}]({project.get('url') or '#'}) "
+        f"- grade {project.get('grade')} / score {project.get('score')} / source {project.get('source')}"
+        for idx, project in enumerate(top_projects, start=1)
+    )
+
+    return f"""# SCOUT Insight Promotion - {insight.get('title')}
+
+Generated at: {datetime.now(timezone.utc).isoformat()}
+
+## Category
+
+- ID: `{insight.get('category_id')}`
+- Total found: {insight.get('total_found')}
+- Total analyzed by SCOUT: {payload.get('total_analyzed')}
+- Recommendation: {insight.get('recommendation')}
+
+## Market Potential
+
+- Score: {potential.get('score', 'n/a')}
+- Viability: {potential.get('viability', 'n/a')}
+- Speed/quality impact: {potential.get('speed_impact', 'n/a')}
+
+{potential.get('pitch', '')}
+
+## Implementation Summary
+
+### What It Is
+
+{summary.get('o_que_e', '')}
+
+### Why It Matters
+
+{summary.get('para_que_serve', '')}
+
+### Where IRIS Uses It
+
+{summary.get('onde_usariamos', '')}
+
+### What We Build
+
+{summary.get('o_que_implementariamos', '')}
+
+## Top Projects
+
+{project_lines or '- No projects available.'}
+
+## Delivery Contract
+
+- Create a technical spike before production integration.
+- Keep implementation inside the authorized IRIS workspace or AIteams project root.
+- Commit every new artifact with `github_commit`.
+- Return `DELIVERY_EVIDENCE` with validation and SHA.
+- Block promotion if license, security, or dependency risk is unacceptable.
+"""
+
+
+def _commit_file(relative_path: Path, commit_message: str) -> str:
+    subprocess.run(["git", "add", "--", str(relative_path)], cwd=_ROOT, check=True, timeout=10)
+    result = subprocess.run(
+        ["git", "commit", "-m", commit_message],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        combined = (result.stdout + "\n" + result.stderr).strip()
+        if "nothing to commit" not in combined.lower():
+            raise RuntimeError(combined or "git commit failed")
+    sha = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+        timeout=10,
+    ).stdout.strip()
+    return sha
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:72] or "insight"
 
 
 async def _scheduler_loop() -> None:
