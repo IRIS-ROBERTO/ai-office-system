@@ -46,6 +46,7 @@ from backend.core.agent_runtime_gateway import get_runtime_gateway_status
 from backend.core.memory_gateway import memory_gateway
 from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
+from backend.core.application_factory import create_application_from_insight
 from backend.config.settings import settings
 from backend.tools.brain_router import get_brain_status
 from backend.tools.model_gate import gate
@@ -1341,6 +1342,24 @@ async def promote_research_insight(category_id: str):
         raise HTTPException(status_code=404, detail=f"Insight '{category_id}' não encontrado.")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Falha ao promover insight: {exc}")
+
+    pushed = await _push_iris_repo_to_github()
+    result["pushed_to_github"] = pushed
+    return result
+
+
+@app.post("/research/insights/{category_id}/create-application")
+async def create_research_application(category_id: str):
+    """Cria uma aplicação inicial versionada a partir de uma categoria de insight."""
+    insights = research_store.generate_insights().get("insights", [])
+    insight = next((item for item in insights if item.get("category_id") == category_id), None)
+    if not insight:
+        raise HTTPException(status_code=404, detail=f"Insight '{category_id}' não encontrado.")
+
+    try:
+        result = create_application_from_insight(insight)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Falha ao criar aplicação: {exc}")
 
     pushed = await _push_iris_repo_to_github()
     result["pushed_to_github"] = pushed

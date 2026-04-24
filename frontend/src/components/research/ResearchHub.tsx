@@ -902,6 +902,8 @@ const InsightsModal: React.FC<{
   const [executing, setExecuting] = useState<string | null>(null);
   const [promoting, setPromoting] = useState<string | null>(null);
   const [promotionResult, setPromotionResult] = useState<Record<string, string>>({});
+  const [creatingApp, setCreatingApp] = useState<string | null>(null);
+  const [applicationResult, setApplicationResult] = useState<Record<string, string>>({});
   const [executions, setExecutions] = useState<Record<string, CategoryExecution>>({});
   const [selected, setSelected] = useState<string>(data.insights[0]?.category_id ?? '');
 
@@ -1010,6 +1012,26 @@ const InsightsModal: React.FC<{
       }));
     } finally {
       setPromoting(null);
+    }
+  };
+
+  const handleCreateApplication = async (cat: InsightCategory) => {
+    setCreatingApp(cat.category_id);
+    try {
+      const resp = await fetch(`${apiUrl}/research/insights/${cat.category_id}/create-application`, { method: 'POST' });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(json?.detail || `Falha HTTP ${resp.status}`);
+      setApplicationResult(prev => ({
+        ...prev,
+        [cat.category_id]: `App ${json.application_slug} · commit ${json.commit_sha}${json.pushed_to_github ? ' · GitHub atualizado' : ''}`,
+      }));
+    } catch (e) {
+      setApplicationResult(prev => ({
+        ...prev,
+        [cat.category_id]: `Falha ao criar app: ${e instanceof Error ? e.message : 'erro desconhecido'}`,
+      }));
+    } finally {
+      setCreatingApp(null);
     }
   };
 
@@ -1283,6 +1305,22 @@ const InsightsModal: React.FC<{
               >
                 {promoting === cat.category_id ? 'Commitando...' : 'Promover + Commit'}
               </button>
+              <button
+                type="button"
+                onClick={() => handleCreateApplication(cat)}
+                disabled={creatingApp === cat.category_id}
+                style={{
+                  padding: '14px 20px', borderRadius: 16,
+                  border: `1px solid rgba(34,197,94,0.36)`,
+                  background: 'rgba(34,197,94,0.12)',
+                  color: '#22c55e',
+                  fontWeight: 800, fontSize: 13, letterSpacing: 0.4,
+                  cursor: creatingApp === cat.category_id ? 'wait' : 'pointer',
+                  transition: 'all 0.2s', whiteSpace: 'nowrap',
+                }}
+              >
+                {creatingApp === cat.category_id ? 'Gerando app...' : 'Criar App + Commit'}
+              </button>
               {dispatched && !isExec && (
                 <div style={{ marginTop: 8, fontSize: 10, color: '#60a5fa', textAlign: 'center' }}>
                   DEV · MKT em execução ↓
@@ -1291,6 +1329,11 @@ const InsightsModal: React.FC<{
               {promotionResult[cat.category_id] && (
                 <div style={{ marginTop: 8, fontSize: 10, color: cat.color, textAlign: 'center', maxWidth: 360 }}>
                   {promotionResult[cat.category_id]}
+                </div>
+              )}
+              {applicationResult[cat.category_id] && (
+                <div style={{ marginTop: 8, fontSize: 10, color: '#22c55e', textAlign: 'center', maxWidth: 420 }}>
+                  {applicationResult[cat.category_id]}
                 </div>
               )}
             </div>
