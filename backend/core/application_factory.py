@@ -1,9 +1,9 @@
 """
 Application Factory for SCOUT insights.
 
-Turns an approved market/technology insight into a small, versioned application
-scaffold inside the IRIS repository. The factory intentionally commits the
-generated application so every new product experiment is auditable on GitHub.
+IRIS improvements stay in the platform repository. Standalone products are
+generated in their own repository under AIteams and pushed to GitHub with
+exclusive commit history from the first delivery.
 """
 from __future__ import annotations
 
@@ -13,20 +13,35 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+
+import httpx
+
+from backend.config.settings import settings
+from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
+from backend.core.research_store import classify_insight_delivery
 
 
 _ROOT = Path(__file__).resolve().parents[2]
 _APP_ROOT = _ROOT / "generated-applications"
+_GITHUB_API = "https://api.github.com"
 
 
 def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
-    """Generate, validate and commit a product application from an insight."""
+    """Generate, validate and commit an application from an insight."""
     category_id = str(insight.get("category_id") or "insight")
     title = str(insight.get("title") or category_id)
     slug = _slugify(f"{category_id}-{title}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    app_dir = _APP_ROOT / f"{stamp}-{slug}"
+    delivery_mode = classify_insight_delivery(category_id)
+    standalone = delivery_mode["repo_strategy"] == "dedicated_repository"
+    app_dir = (
+        GENERATED_PROJECTS_ROOT / f"{stamp}-{slug}"
+        if standalone
+        else _APP_ROOT / f"{stamp}-{slug}"
+    )
     app_dir.mkdir(parents=True, exist_ok=False)
+    repo_root = _prepare_repo_root(app_dir, standalone=standalone)
 
     files = _build_files(insight, app_dir.name)
     written: list[Path] = []
@@ -38,7 +53,15 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
 
     validation = _run_validation(app_dir)
     commit_message = f"SCOUT: create {slug} application"
-    commit_sha = _commit_paths(written, commit_message)
+    remote_url = _ensure_repo_remote(repo_root) if standalone else None
+    commit_sha = _commit_paths(
+        written,
+        commit_message,
+        repo_root=repo_root,
+        push=standalone,
+        branch="main",
+        remote_url=remote_url,
+    )
 
     return {
         "status": "created",
@@ -46,12 +69,46 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
         "application_name": title,
         "application_slug": app_dir.name,
         "application_path": str(app_dir),
-        "repo_relative_path": str(app_dir.relative_to(_ROOT)).replace("\\", "/"),
-        "files_changed": [str(path.relative_to(_ROOT)).replace("\\", "/") for path in written],
+        "repo_relative_path": _repo_relative_path(app_dir, repo_root),
+        "repo_path": str(repo_root),
+        "repo_strategy": delivery_mode["repo_strategy"],
+        "project_kind": delivery_mode["project_kind"],
+        "files_changed": [str(path.relative_to(repo_root)).replace("\\", "/") for path in written],
         "validation": validation,
         "commit_message": commit_message,
         "commit_sha": commit_sha,
+        "pushed_to_github": standalone,
+        "github_repo_url": remote_url.removesuffix(".git") if remote_url else None,
     }
+
+
+def _prepare_repo_root(app_dir: Path, *, standalone: bool) -> Path:
+    if not standalone:
+        return _ROOT
+
+    init = subprocess.run(
+        ["git", "init"],
+        cwd=app_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=20,
+    )
+    if init.returncode != 0:
+        raise RuntimeError((init.stdout + "\n" + init.stderr).strip() or "git init failed")
+    subprocess.run(
+        ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+        cwd=app_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=10,
+    )
+    return app_dir
 
 
 def _build_files(insight: dict[str, Any], app_slug: str) -> dict[str, str]:
@@ -127,12 +184,20 @@ def _run_validation(app_dir: Path) -> list[dict[str, str]]:
     return checks
 
 
-def _commit_paths(paths: list[Path], commit_message: str) -> str:
-    relative_paths = [str(path.relative_to(_ROOT)).replace("\\", "/") for path in paths]
-    subprocess.run(["git", "add", "--", *relative_paths], cwd=_ROOT, check=True, timeout=20)
+def _commit_paths(
+    paths: list[Path],
+    commit_message: str,
+    *,
+    repo_root: Path,
+    push: bool,
+    branch: str,
+    remote_url: str | None,
+) -> str:
+    relative_paths = [str(path.relative_to(repo_root)).replace("\\", "/") for path in paths]
+    subprocess.run(["git", "add", "--", *relative_paths], cwd=repo_root, check=True, timeout=20)
     result = subprocess.run(
         ["git", "commit", "-m", commit_message, "--only", "--", *relative_paths],
-        cwd=_ROOT,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -142,9 +207,23 @@ def _commit_paths(paths: list[Path], commit_message: str) -> str:
     )
     if result.returncode != 0:
         raise RuntimeError((result.stdout + "\n" + result.stderr).strip() or "git commit failed")
+    if push and remote_url:
+        push_url = _remote_url_with_token(remote_url, settings.GITHUB_TOKEN)
+        push_result = subprocess.run(
+            ["git", "push", "-u", push_url, f"HEAD:{branch}"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=60,
+        )
+        if push_result.returncode != 0:
+            raise RuntimeError((push_result.stdout + "\n" + push_result.stderr).strip() or "git push failed")
     sha = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        cwd=_ROOT,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -153,6 +232,56 @@ def _commit_paths(paths: list[Path], commit_message: str) -> str:
         timeout=10,
     ).stdout.strip()
     return sha
+
+
+def _ensure_repo_remote(repo_root: Path) -> str:
+    if not settings.GITHUB_TOKEN:
+        raise RuntimeError("GITHUB_TOKEN ausente para criar repositório dedicado no GitHub")
+
+    owner = settings.GITHUB_DEFAULT_ORG or settings.GITHUB_USERNAME
+    repo_name = _slugify(repo_root.name)
+    remote_url = f"https://github.com/{owner}/{repo_name}.git"
+    headers = {
+        "Authorization": f"token {settings.GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    payload = {
+        "name": repo_name,
+        "description": f"Standalone product generated by IRIS SCOUT - {repo_name}",
+        "private": False,
+        "auto_init": False,
+    }
+    with httpx.Client(headers=headers, timeout=30) as client:
+        response = client.post(f"{_GITHUB_API}/user/repos", json=payload)
+        if response.status_code not in (201, 422):
+            response.raise_for_status()
+
+    add_remote = subprocess.run(
+        ["git", "remote", "add", "origin", remote_url],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=10,
+    )
+    if add_remote.returncode != 0 and "already exists" not in ((add_remote.stderr or "") + (add_remote.stdout or "")).lower():
+        raise RuntimeError((add_remote.stdout + "\n" + add_remote.stderr).strip() or "git remote add failed")
+    return remote_url
+
+
+def _remote_url_with_token(remote_url: str, token: str) -> str:
+    safe_token = quote(token or "", safe="")
+    if remote_url.startswith("https://github.com/"):
+        return remote_url.replace("https://github.com/", f"https://x-access-token:{safe_token}@github.com/", 1)
+    return remote_url
+
+
+def _repo_relative_path(app_dir: Path, repo_root: Path) -> str:
+    if repo_root == _ROOT:
+        return str(app_dir.relative_to(_ROOT)).replace("\\", "/")
+    return "."
 
 
 def _slugify(value: str) -> str:
@@ -172,7 +301,7 @@ Application scaffold generated by IRIS SCOUT Application Factory.
 ## Run
 
 ```bash
-cd generated-applications/{app_slug}
+cd {app_slug}
 npm test
 python -m http.server 5179
 ```
@@ -183,7 +312,7 @@ Open `http://127.0.0.1:5179/`.
 
 - Source: SCOUT insight
 - Validation: `node --check src/app.js` and `node tests/smoke-check.js`
-- Commit policy: every generated app is committed to the IRIS repository
+- Commit policy: standalone products use their own repository; IRIS improvements stay in the platform repository
 """
 
 

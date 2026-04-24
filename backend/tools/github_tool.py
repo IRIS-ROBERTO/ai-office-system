@@ -10,6 +10,7 @@ Modo legado:
 """
 import base64
 import logging
+import re
 import subprocess
 from pathlib import Path
 from urllib.parse import quote
@@ -186,9 +187,12 @@ class GitHubTool(BaseTool):
     def _push(self, repo_root: Path, current_branch: str) -> subprocess.CompletedProcess[str]:
         remote = self._git(repo_root, ["remote", "get-url", "origin"], check=False)
         remote_url = (remote.stdout or "").strip()
+        if remote.returncode != 0 and self._is_generated_project_repo(repo_root):
+            remote_url = self._ensure_generated_project_remote(repo_root)
+            remote = self._git(repo_root, ["remote", "get-url", "origin"], check=False)
         if remote.returncode == 0 and settings.GITHUB_TOKEN and "github.com" in remote_url:
             push_url = self._remote_url_with_token(remote_url, settings.GITHUB_TOKEN)
-            return self._git(repo_root, ["push", push_url, f"HEAD:{current_branch}"], check=False)
+            return self._git(repo_root, ["push", "-u", push_url, f"HEAD:{current_branch}"], check=False)
         return self._git(repo_root, ["push", "origin", current_branch], check=False)
 
     def _remote_url_with_token(self, remote_url: str, token: str) -> str:
@@ -293,10 +297,49 @@ class GitHubTool(BaseTool):
             if init_result.returncode != 0:
                 message = (init_result.stderr or init_result.stdout or "").strip()
                 raise RuntimeError(f"git init falhou em '{candidate}': {message}")
+            self._git(candidate, ["symbolic-ref", "HEAD", "refs/heads/main"], check=False)
             result = self._git(candidate, ["rev-parse", "--show-toplevel"], check=False)
             if result.returncode != 0:
                 raise RuntimeError(f"'{candidate}' não pôde ser inicializado como repositório git.")
         return Path(result.stdout.strip()).resolve()
+
+    def _is_generated_project_repo(self, repo_root: Path) -> bool:
+        try:
+            relative = repo_root.resolve().relative_to(GENERATED_PROJECTS_ROOT.resolve())
+        except ValueError:
+            return False
+        return bool(relative.parts) and relative.parts[0] != "_system"
+
+    def _ensure_generated_project_remote(self, repo_root: Path) -> str:
+        if not settings.GITHUB_TOKEN:
+            raise RuntimeError("GITHUB_TOKEN ausente para criar repositório remoto exclusivo.")
+
+        owner = settings.GITHUB_DEFAULT_ORG or settings.GITHUB_USERNAME
+        repo_name = re.sub(r"[^a-z0-9]+", "-", repo_root.name.lower()).strip("-") or "iris-project"
+        remote_url = f"https://github.com/{owner}/{repo_name}.git"
+        headers = {
+            "Authorization": f"token {settings.GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        payload = {
+            "name": repo_name,
+            "description": f"Projeto gerado pelo IRIS — {repo_name}",
+            "private": False,
+            "auto_init": False,
+        }
+
+        with httpx.Client(headers=headers, timeout=30) as client:
+            response = client.post(f"{GITHUB_API}/user/repos", json=payload)
+            if response.status_code not in (201, 422):
+                response.raise_for_status()
+
+        existing_remote = self._git(repo_root, ["remote", "get-url", "origin"], check=False)
+        if existing_remote.returncode != 0:
+            add_remote = self._git(repo_root, ["remote", "add", "origin", remote_url], check=False)
+            if add_remote.returncode != 0:
+                message = (add_remote.stderr or add_remote.stdout or "").strip()
+                raise RuntimeError(f"git remote add origin falhou: {message}")
+        return remote_url
 
     def _is_allowed_repo(self, candidate: Path) -> bool:
         try:

@@ -24,6 +24,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 _FINDINGS_FILE = _RUNTIME_DIR / "research_findings.json"
 _CONFIG_FILE = _RUNTIME_DIR / "research_schedule_config.json"
 _PROMOTED_INSIGHTS_DIR = _ROOT / "docs" / "research-insights"
+_PRODUCT_CATS = {"produto_novo", "ia_generativa_mercado", "combinacoes_estrategicas"}
+_IRIS_CATS = {"novos_plugins", "integracao_llm", "memoria_rag", "automacao_workflow"}
 
 _DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
@@ -667,9 +669,6 @@ def generate_insights() -> dict[str, Any]:
         },
     }
 
-    _PRODUCT_CATS = {"produto_novo", "ia_generativa_mercado", "combinacoes_estrategicas"}
-    _IRIS_CATS = {"novos_plugins", "integracao_llm", "memoria_rag", "automacao_workflow"}
-
     for finding in _findings:
         if finding.get("type") == "combination" or finding.get("source") == "combination":
             categories["combinacoes_estrategicas"]["findings"].append(finding)
@@ -718,6 +717,7 @@ def generate_insights() -> dict[str, Any]:
             "color": cat["color"],
             "icon": cat["icon"],
             "total_found": len(cat["findings"]),
+            "delivery_mode": classify_insight_delivery(cat_id),
             "recommendation": _generate_recommendation(cat_id, top5, len(cat["findings"])),
             "summary": _generate_summary(cat_id, top5, len(cat["findings"])),
             "product_potential": _score_product_potential(cat_id, top5, len(cat["findings"])),
@@ -744,6 +744,27 @@ def generate_insights() -> dict[str, Any]:
         "insights": insights,
         "total_analyzed": len(_findings),
         "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def classify_insight_delivery(category_id: str) -> dict[str, str]:
+    category = (category_id or "").strip().lower()
+    if category in _PRODUCT_CATS:
+        return {
+            "project_kind": "standalone_product",
+            "repo_strategy": "dedicated_repository",
+            "commit_scope": "exclusive",
+        }
+    if category in _IRIS_CATS:
+        return {
+            "project_kind": "iris_improvement",
+            "repo_strategy": "iris_repository",
+            "commit_scope": "platform",
+        }
+    return {
+        "project_kind": "unknown",
+        "repo_strategy": "iris_repository",
+        "commit_scope": "platform",
     }
 
 

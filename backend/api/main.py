@@ -1350,7 +1350,7 @@ async def promote_research_insight(category_id: str):
 
 @app.post("/research/insights/{category_id}/create-application")
 async def create_research_application(category_id: str):
-    """Cria uma aplicação inicial versionada a partir de uma categoria de insight."""
+    """Cria uma aplicação inicial a partir de insight, respeitando a estratégia de repositório."""
     insights = research_store.generate_insights().get("insights", [])
     insight = next((item for item in insights if item.get("category_id") == category_id), None)
     if not insight:
@@ -1361,8 +1361,8 @@ async def create_research_application(category_id: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Falha ao criar aplicação: {exc}")
 
-    pushed = await _push_iris_repo_to_github()
-    result["pushed_to_github"] = pushed
+    if result.get("repo_strategy") == "iris_repository":
+        result["pushed_to_github"] = await _push_iris_repo_to_github()
     return result
 
 

@@ -1021,9 +1021,12 @@ const InsightsModal: React.FC<{
       const resp = await fetch(`${apiUrl}/research/insights/${cat.category_id}/create-application`, { method: 'POST' });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) throw new Error(json?.detail || `Falha HTTP ${resp.status}`);
+      const repoSummary = json?.repo_strategy === 'dedicated_repository'
+        ? `repo dedicado ${json?.github_repo_url || ''}`.trim()
+        : 'repo IRIS';
       setApplicationResult(prev => ({
         ...prev,
-        [cat.category_id]: `App ${json.application_slug} · commit ${json.commit_sha}${json.pushed_to_github ? ' · GitHub atualizado' : ''}`,
+        [cat.category_id]: `App ${json.application_slug} · commit ${json.commit_sha} · ${repoSummary}${json.pushed_to_github ? ' · GitHub atualizado' : ''}`,
       }));
     } catch (e) {
       setApplicationResult(prev => ({
