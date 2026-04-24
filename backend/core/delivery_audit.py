@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MANIFEST_ROOT = _ROOT / ".runtime" / "delivery-manifests"
@@ -65,6 +66,33 @@ def get_task_delivery_audit(task_id: str) -> dict[str, Any]:
     }
 
 
+def get_delivery_track_metrics() -> dict[str, Any]:
+    items = _load_manifest_summaries()
+    tracks = {
+        "platform": _empty_track_metrics(),
+        "standalone": _empty_track_metrics(),
+    }
+
+    for item in items:
+        track = _delivery_track_for_repo(item.get("repo_path", ""))
+        bucket = tracks[track]
+        bucket["total"] += 1
+        if item["approved"]:
+            bucket["approved"] += 1
+        else:
+            bucket["failed"] += 1
+        if item["functional_ready"]:
+            bucket["functional_ready"] += 1
+        if item.get("pushed"):
+            bucket["pushed"] += 1
+
+    for bucket in tracks.values():
+        total = bucket["total"] or 1
+        bucket["approval_rate"] = round(bucket["approved"] / total * 100, 1) if bucket["total"] else 0.0
+        bucket["push_rate"] = round(bucket["pushed"] / total * 100, 1) if bucket["total"] else 0.0
+    return tracks
+
+
 def _load_manifest_summaries(*, task_id: str | None = None) -> list[dict[str, Any]]:
     if not _MANIFEST_ROOT.exists():
         return []
@@ -115,6 +143,7 @@ def _summarize_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[s
         "commit_sha": evidence.get("commit_sha", ""),
         "commit_message": evidence.get("commit_message", ""),
         "repo_path": evidence.get("repo_path", ""),
+        "delivery_track": _delivery_track_for_repo(evidence.get("repo_path", "")),
         "files_changed": evidence.get("files_changed") or [],
         "pushed": evidence.get("pushed"),
         "stages": [
@@ -126,6 +155,29 @@ def _summarize_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[s
             }
             for stage in stages
         ],
+    }
+
+
+def _delivery_track_for_repo(repo_path: str) -> str:
+    if not repo_path:
+        return "platform"
+    try:
+        candidate = Path(repo_path).expanduser().resolve()
+        candidate.relative_to(GENERATED_PROJECTS_ROOT.resolve())
+        return "standalone"
+    except Exception:
+        return "platform"
+
+
+def _empty_track_metrics() -> dict[str, Any]:
+    return {
+        "total": 0,
+        "approved": 0,
+        "failed": 0,
+        "functional_ready": 0,
+        "pushed": 0,
+        "approval_rate": 0.0,
+        "push_rate": 0.0,
     }
 
 

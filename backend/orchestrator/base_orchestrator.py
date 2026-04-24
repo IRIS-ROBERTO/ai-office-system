@@ -828,6 +828,7 @@ class BaseOrchestrator(ABC):
                 f"**Critérios de Aceitação:**\n{subtask['acceptance_criteria']}\n\n"
                 f"**Contexto completo da requisição:**\n{state['original_request']}\n\n"
                 f"{retry_section}"
+                f"{self._role_hardening_contract(role)}"
                 f"{build_gold_standard_prompt(role=role, agent_id=agent_id)}\n\n"
                 "## Regra obrigatória de versionamento\n"
                 "Se você produzir qualquer artefato versionável (código, documentação, teste, "
@@ -1755,6 +1756,28 @@ class BaseOrchestrator(ABC):
         if self.team == TeamType.DEV:
             return "backend"
         return "content"
+
+    def _role_hardening_contract(self, role: str) -> str:
+        normalized = self._normalize_role(role)
+        if normalized == "planner":
+            return (
+                "## Contrato reforcado do Planner\n"
+                "- Nao entregue plano generico.\n"
+                "- Liste artefatos e arquivos-alvo explicitamente.\n"
+                "- Defina validacao objetiva por frente de trabalho.\n"
+                "- Defina handoff explicito entre especialistas.\n"
+                "- O plano precisa ser executavel sem interpretacao subjetiva.\n\n"
+            )
+        if normalized == "research":
+            return (
+                "## Contrato reforcado de Research\n"
+                "- Nao entregue apenas narrativa.\n"
+                "- Liste fontes, projetos ou evidencias observadas.\n"
+                "- Declare tese principal, risco principal e recomendacao objetiva.\n"
+                "- Declare estrategia de entrega: iris_repository ou dedicated_repository.\n"
+                "- Se houver artefato versionavel, inclua commit e DELIVERY_EVIDENCE completos.\n\n"
+            )
+        return ""
 
     def _wants_gold_standard_project_pipeline(self, request: str) -> bool:
         if self.team != TeamType.DEV:

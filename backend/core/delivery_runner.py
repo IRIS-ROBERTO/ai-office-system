@@ -21,6 +21,7 @@ from backend.core.delivery_evidence import (
     EvidenceValidationResult,
     validate_delivery_evidence,
 )
+from backend.core.delivery_retrospective import write_manifest_retrospective
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 from backend.core.memory_gateway import memory_gateway
 
@@ -141,6 +142,7 @@ class DeliveryRunner:
         )
         manifest.manifest_path = str(self._manifest_path(manifest.task_id, manifest.subtask_id))
         self._write_manifest(manifest)
+        write_manifest_retrospective(manifest.to_dict())
         self._capture_memory(manifest)
         return manifest
 

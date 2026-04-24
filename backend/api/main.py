@@ -29,7 +29,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.event_bus import event_bus
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
-from backend.core.delivery_audit import get_task_delivery_audit, list_delivery_audits
+from backend.core.delivery_audit import get_delivery_track_metrics, get_task_delivery_audit, list_delivery_audits
+from backend.core.delivery_retrospective import list_retrospectives
 from backend.core.execution_trace import (
     append_execution_log,
     get_execution_log,
@@ -46,7 +47,11 @@ from backend.core.agent_runtime_gateway import get_runtime_gateway_status
 from backend.core.memory_gateway import memory_gateway
 from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
-from backend.core.application_factory import create_application_from_insight
+from backend.core.application_factory import (
+    create_application_from_insight,
+    get_product_factory_metrics,
+    list_product_factory_registry,
+)
 from backend.config.settings import settings
 from backend.tools.brain_router import get_brain_status
 from backend.tools.model_gate import gate
@@ -855,6 +860,18 @@ async def get_delivery_audit_endpoint(task_id: str):
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' não encontrada.")
 
 
+@app.get("/delivery/metrics")
+async def get_delivery_metrics_endpoint():
+    """Métricas operacionais separadas por trilha: plataforma vs produtos standalone."""
+    return {"tracks": get_delivery_track_metrics()}
+
+
+@app.get("/delivery/retrospectives")
+async def list_delivery_retrospectives(limit: int = 50, task_id: str | None = None):
+    """Lista retrospectivas determinísticas geradas a partir de manifestos."""
+    return list_retrospectives(task_id=task_id, limit=limit)
+
+
 @app.post("/service-requests", response_model=ServiceRequestResponse, status_code=202)
 async def create_service_request(request: Request, body: ServiceRequestCreate, background_tasks: BackgroundTasks):
     """Cria uma solicitação formal para um time e já a liga ao runtime do escritório."""
@@ -1331,6 +1348,18 @@ async def get_research_scheduler_status():
 async def get_research_insights():
     """Gera insights de melhoria baseados nos findings do SCOUT."""
     return research_store.generate_insights()
+
+
+@app.get("/product-factory/metrics")
+async def product_factory_metrics():
+    """Métricas do Product Factory: estratégia de repositório, tipo de projeto e taxa de provisionamento."""
+    return get_product_factory_metrics()
+
+
+@app.get("/product-factory/registry")
+async def product_factory_registry(limit: int = 50):
+    """Histórico persistido de produtos gerados pelo Product Factory."""
+    return list_product_factory_registry(limit=limit)
 
 
 @app.post("/research/insights/{category_id}/promote")

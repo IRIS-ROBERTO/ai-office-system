@@ -25,6 +25,8 @@ from backend.core.research_store import classify_insight_delivery
 _ROOT = Path(__file__).resolve().parents[2]
 _APP_ROOT = _ROOT / "generated-applications"
 _GITHUB_API = "https://api.github.com"
+_FACTORY_RUNTIME_DIR = _ROOT / ".runtime" / "product-factory"
+_FACTORY_REGISTRY = _FACTORY_RUNTIME_DIR / "registry.jsonl"
 
 
 def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
@@ -63,8 +65,21 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
         remote_url=remote_url,
     )
 
-    return {
+    provisioning_gate = _build_repo_provisioning_gate(
+        repo_root=repo_root,
+        remote_url=remote_url,
+        branch="main",
+        commit_sha=commit_sha,
+        pushed=standalone,
+        repo_strategy=delivery_mode["repo_strategy"],
+    )
+
+    if not provisioning_gate["approved"]:
+        raise RuntimeError("repo provisioning gate failed: " + "; ".join(provisioning_gate["failed_checks"]))
+
+    result = {
         "status": "created",
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "category_id": category_id,
         "application_name": title,
         "application_slug": app_dir.name,
@@ -79,7 +94,10 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
         "commit_sha": commit_sha,
         "pushed_to_github": standalone,
         "github_repo_url": remote_url.removesuffix(".git") if remote_url else None,
+        "provisioning_gate": provisioning_gate,
     }
+    _append_factory_registry(result)
+    return result
 
 
 def _prepare_repo_root(app_dir: Path, *, standalone: bool) -> Path:
@@ -133,6 +151,8 @@ def _build_files(insight: dict[str, Any], app_slug: str) -> dict[str, str]:
 
     return {
         "README.md": _readme(title, description, app_slug),
+        "ROADMAP.md": _roadmap(title),
+        "LICENSE": _license_text(),
         "package.json": _package_json(app_slug),
         "index.html": _index_html(title),
         "src/data.js": f"export const scoutInsight = {data_json};\n",
@@ -284,6 +304,129 @@ def _repo_relative_path(app_dir: Path, repo_root: Path) -> str:
     return "."
 
 
+def list_product_factory_registry(*, limit: int = 50) -> dict[str, Any]:
+    rows = _read_factory_registry()
+    rows.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    limited = rows[: max(1, min(limit, 200))]
+    return {"total": len(rows), "returned": len(limited), "items": limited}
+
+
+def get_product_factory_metrics() -> dict[str, Any]:
+    rows = _read_factory_registry()
+    if not rows:
+        return {
+            "total_products": 0,
+            "by_repo_strategy": {},
+            "by_project_kind": {},
+            "provisioning_gate_pass_rate": 0.0,
+            "github_push_rate": 0.0,
+        }
+
+    by_repo_strategy: dict[str, int] = {}
+    by_project_kind: dict[str, int] = {}
+    gate_passed = 0
+    pushed = 0
+
+    for row in rows:
+        strategy = str(row.get("repo_strategy") or "unknown")
+        kind = str(row.get("project_kind") or "unknown")
+        by_repo_strategy[strategy] = by_repo_strategy.get(strategy, 0) + 1
+        by_project_kind[kind] = by_project_kind.get(kind, 0) + 1
+        gate = row.get("provisioning_gate") or {}
+        if gate.get("approved"):
+            gate_passed += 1
+        if row.get("pushed_to_github"):
+            pushed += 1
+
+    total = len(rows)
+    return {
+        "total_products": total,
+        "by_repo_strategy": by_repo_strategy,
+        "by_project_kind": by_project_kind,
+        "provisioning_gate_pass_rate": round(gate_passed / total * 100, 1),
+        "github_push_rate": round(pushed / total * 100, 1),
+    }
+
+
+def _build_repo_provisioning_gate(
+    *,
+    repo_root: Path,
+    remote_url: str | None,
+    branch: str,
+    commit_sha: str,
+    pushed: bool,
+    repo_strategy: str,
+) -> dict[str, Any]:
+    checks = {
+        "git_repo_initialized": (repo_root / ".git").exists(),
+        "origin_configured": True,
+        "main_branch_ready": _git_stdout(repo_root, ["branch", "--show-current"]) == branch,
+        "head_commit_present": _git_stdout(repo_root, ["rev-parse", "--short", "HEAD"]) == commit_sha,
+        "push_confirmed": True,
+        "github_repo_url_present": True,
+    }
+    if repo_strategy == "dedicated_repository":
+        checks["origin_configured"] = _git_ok(repo_root, ["remote", "get-url", "origin"])
+        checks["push_confirmed"] = bool(pushed)
+        checks["github_repo_url_present"] = bool(remote_url)
+    failed = [name for name, ok in checks.items() if not ok]
+    return {
+        "approved": not failed,
+        "failed_checks": failed,
+        "checks": checks,
+    }
+
+
+def _append_factory_registry(payload: dict[str, Any]) -> None:
+    _FACTORY_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    with _FACTORY_REGISTRY.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
+def _read_factory_registry() -> list[dict[str, Any]]:
+    if not _FACTORY_REGISTRY.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in _FACTORY_REGISTRY.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _git_ok(repo_root: Path, args: list[str]) -> bool:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=10,
+    )
+    return result.returncode == 0
+
+
+def _git_stdout(repo_root: Path, args: list[str]) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug[:72] or "scout-application"
@@ -313,6 +456,54 @@ Open `http://127.0.0.1:5179/`.
 - Source: SCOUT insight
 - Validation: `node --check src/app.js` and `node tests/smoke-check.js`
 - Commit policy: standalone products use their own repository; IRIS improvements stay in the platform repository
+"""
+
+
+def _roadmap(title: str) -> str:
+    return f"""# {title} Roadmap
+
+## V0.1
+
+- Publish functional static MVP
+- Validate smoke test and repository provisioning gate
+- Confirm market thesis against first operator feedback
+
+## V0.2
+
+- Add real data source instead of embedded insight snapshot
+- Add onboarding flow and operator configuration
+- Add basic analytics and feedback capture
+
+## V1
+
+- Production backend and persistence
+- Subscription or pricing surface
+- CI pipeline and release automation
+"""
+
+
+def _license_text() -> str:
+    return """MIT License
+
+Copyright (c) 2026 IRIS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 """
 
 
