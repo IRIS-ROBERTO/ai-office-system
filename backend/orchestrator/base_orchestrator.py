@@ -2106,6 +2106,14 @@ class BaseOrchestrator(ABC):
         if any(marker in normalized for marker in markers):
             return True
 
+        simple_static_web = (
+            any(marker in normalized for marker in ("pagina html", "página html", "html estatica", "html estática", "web estatica", "web estática"))
+            and any(marker in normalized for marker in ("simples", "minimo", "mínimo", "curto", "smoke"))
+            and not any(marker in normalized for marker in ("react", "next.js", "backend", "database", "banco de dados", "microservico", "microserviço"))
+        )
+        if simple_static_web:
+            return True
+
         simple_doc_markers = (
             "relatorio",
             "relatório",

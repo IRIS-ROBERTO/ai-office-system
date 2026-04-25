@@ -27,12 +27,19 @@ def can_handle_static_web_delivery(subtask: dict[str, Any]) -> bool:
         str(subtask.get(key) or "")
         for key in ("title", "description", "acceptance_criteria", "assigned_role")
     ).lower()
+    frontend_requested = "frontend" in source or any(
+        marker in source
+        for marker in ("html", "css", "javascript", "pagina estatica", "pagina html", "web estatica", "aplicacao estatica")
+    )
+    static_requested = any(
+        marker in source
+        for marker in ("index.html", "html", "html/css/javascript", "vanilla", "web estatica", "pagina estatica", "pagina html")
+    )
+    complex_markers = ("fastapi", "database", "banco de dados", "microservico", "microserviço")
     return (
-        "frontend" in source
-        and "index.html" in source
-        and "src/app.js" in source
-        and "src/styles.css" in source
-        and ("vanilla" in source or "html/css/javascript" in source or "web estatica" in source)
+        frontend_requested
+        and static_requested
+        and not any(marker in source for marker in complex_markers)
     )
 
 
@@ -246,7 +253,7 @@ def execute_static_web_delivery(
     agent_id: str,
     subtask: dict[str, Any],
 ) -> str:
-    project_root = _extract_project_root(subtask)
+    project_root = _resolve_or_create_project_root(subtask)
     project_root.mkdir(parents=True, exist_ok=True)
     (project_root / "src").mkdir(parents=True, exist_ok=True)
 
