@@ -1,0 +1,9 @@
+{
+  "name": "20260425-122308-integracao-llm-aprimoramento-de-llm",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node tests/smoke-check.js"
+  }
+}
