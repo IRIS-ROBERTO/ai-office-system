@@ -86,11 +86,14 @@ def get_delivery_track_metrics() -> dict[str, Any]:
             bucket["functional_ready"] += 1
         if item.get("pushed"):
             bucket["pushed"] += 1
+        if str(item.get("github_repo_url") or "").strip() == "not_provisioned":
+            bucket["not_provisioned"] += 1
 
     for bucket in tracks.values():
         total = bucket["total"] or 1
         bucket["approval_rate"] = round(bucket["approved"] / total * 100, 1) if bucket["total"] else 0.0
         bucket["push_rate"] = round(bucket["pushed"] / total * 100, 1) if bucket["total"] else 0.0
+        bucket["not_provisioned_rate"] = round(bucket["not_provisioned"] / total * 100, 1) if bucket["total"] else 0.0
     return tracks
 
 
@@ -145,6 +148,7 @@ def _summarize_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[s
         "commit_sha": evidence.get("commit_sha", ""),
         "commit_message": evidence.get("commit_message", ""),
         "repo_path": evidence.get("repo_path", ""),
+        "github_repo_url": evidence.get("github_repo_url", ""),
         "delivery_track": _delivery_track_for_repo(evidence.get("repo_path", "")),
         "files_changed": evidence.get("files_changed") or [],
         "pushed": evidence.get("pushed"),
@@ -178,8 +182,10 @@ def _empty_track_metrics() -> dict[str, Any]:
         "failed": 0,
         "functional_ready": 0,
         "pushed": 0,
+        "not_provisioned": 0,
         "approval_rate": 0.0,
         "push_rate": 0.0,
+        "not_provisioned_rate": 0.0,
     }
 
 
