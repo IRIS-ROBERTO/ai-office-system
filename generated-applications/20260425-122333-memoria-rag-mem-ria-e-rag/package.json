@@ -1,0 +1,9 @@
+{
+  "name": "20260425-122333-memoria-rag-mem-ria-e-rag",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node tests/smoke-check.js"
+  }
+}
