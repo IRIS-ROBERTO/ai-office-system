@@ -27,6 +27,20 @@ _APP_ROOT = _ROOT / "generated-applications"
 _GITHUB_API = "https://api.github.com"
 _FACTORY_RUNTIME_DIR = _ROOT / ".runtime" / "product-factory"
 _FACTORY_REGISTRY = _FACTORY_RUNTIME_DIR / "registry.jsonl"
+_REQUIRED_PRODUCT_ARTIFACTS = {
+    "README.md",
+    "ROADMAP.md",
+    "LICENSE",
+    "index.html",
+    "src/app.js",
+    "src/styles.css",
+    "src/data.js",
+    "docs/ARCHITECTURE.md",
+    "docs/RUNBOOK.md",
+    "docs/MARKET_BRIEF.md",
+    "security/SECURITY_REVIEW.md",
+    "tests/smoke-check.js",
+}
 
 
 def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
@@ -144,6 +158,12 @@ def update_product_factory_delivery_status(
         value_gate = dict(row.get("product_value_gate") or {})
         value_checks = dict(value_gate.get("checks") or {})
         if value_checks:
+            app_dir = Path(str(row.get("application_path") or ""))
+            if app_dir.exists():
+                value_checks["required_artifacts_present"] = all(
+                    (app_dir / artifact).exists()
+                    for artifact in _REQUIRED_PRODUCT_ARTIFACTS
+                )
             value_checks["repository_ready"] = bool(gate["approved"])
             value_gate["checks"] = value_checks
             value_gate["failed_checks"] = [name for name, ok in value_checks.items() if not ok]
@@ -436,20 +456,6 @@ def _build_product_value_gate(
     potential = insight.get("product_potential") or {}
     top_projects = insight.get("top_projects") or []
     summary = insight.get("summary") or {}
-    required_files = {
-        "README.md",
-        "ROADMAP.md",
-        "LICENSE",
-        "index.html",
-        "src/app.js",
-        "src/styles.css",
-        "src/data.js",
-        "docs/ARCHITECTURE.md",
-        "docs/RUNBOOK.md",
-        "docs/MARKET_BRIEF.md",
-        "security/SECURITY_REVIEW.md",
-        "tests/smoke-check.js",
-    }
     changed = set(files_changed)
     checks = {
         "market_score_present": int(potential.get("score") or 0) >= 70,
@@ -459,7 +465,7 @@ def _build_product_value_gate(
             str(summary.get(key) or "").strip()
             for key in ("o_que_e", "para_que_serve", "onde_usariamos", "o_que_implementariamos")
         ),
-        "required_artifacts_present": _all_required_artifacts_present(required_files, changed),
+        "required_artifacts_present": _all_required_artifacts_present(_REQUIRED_PRODUCT_ARTIFACTS, changed),
         "validation_passed": bool(validation) and all(item.get("result") == "passed" for item in validation),
         "security_review_present": (app_dir / "security" / "SECURITY_REVIEW.md").exists(),
         "runbook_present": (app_dir / "docs" / "RUNBOOK.md").exists(),
