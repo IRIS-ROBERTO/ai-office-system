@@ -421,6 +421,15 @@ class BaseOrchestrator(ABC):
                 err_str = str(exc).lower()
                 if "429" in err_str or "rate" in err_str or "quota" in err_str:
                     record_transient_openrouter_failure(str(getattr(_llm_attempt, "model", "?")), exc)
+                    self._trace(
+                        task_id,
+                        "senior_model_fallback",
+                        f"Planejamento remoto indisponivel/rate limited; tentando proximo modelo: {getattr(_llm_attempt, 'model', '?')}.",
+                        level="warning",
+                        agent_id=orch_id,
+                        agent_role=AgentRole.ORCHESTRATOR.value,
+                        metadata={"candidate_model": str(getattr(_llm_attempt, "model", "?"))},
+                    )
                     logger.warning(
                         "[%s] RateLimit/Quota em %s — tentando proximo modelo. Erro: %s",
                         orch_id, getattr(_llm_attempt, 'model', '?'), exc
@@ -1912,7 +1921,50 @@ class BaseOrchestrator(ABC):
             "single subtask",
             "one subtask",
         )
-        return any(marker in normalized for marker in markers)
+        if any(marker in normalized for marker in markers):
+            return True
+
+        simple_doc_markers = (
+            "relatorio",
+            "relatório",
+            "markdown",
+            "checklist",
+            "documento",
+            "runbook",
+            "guia",
+            "instrucoes",
+            "instruções",
+        )
+        simple_scope_markers = (
+            "curto",
+            "simples",
+            "objetivo",
+            "operacional",
+        )
+        complex_project_markers = (
+            "frontend",
+            "backend",
+            "api",
+            "banco de dados",
+            "database",
+            "tela",
+            "react",
+            "vite",
+            "migracao",
+            "migração",
+            "deploy",
+            "pipeline",
+            "microservico",
+            "microserviço",
+            "arquitetura completa",
+            "mvp",
+        )
+
+        looks_like_simple_doc = any(marker in normalized for marker in simple_doc_markers)
+        bounded_scope = any(marker in normalized for marker in simple_scope_markers)
+        mentions_complex_build = any(marker in normalized for marker in complex_project_markers)
+
+        return looks_like_simple_doc and bounded_scope and not mentions_complex_build
 
     def _infer_dev_role_for_request(self, normalized_request: str) -> str:
         web_markers = (
