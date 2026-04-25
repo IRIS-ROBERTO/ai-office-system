@@ -45,7 +45,24 @@ def can_handle_document_delivery(subtask: dict[str, Any]) -> bool:
         str(subtask.get(key) or "")
         for key in ("title", "description", "assigned_role")
     ).lower()
-    doc_markers = ("relatorio", "relatório", "markdown", "checklist", "runbook", "guia")
+    doc_markers = (
+        "relatorio",
+        "relatório",
+        "markdown",
+        "checklist",
+        "runbook",
+        "guia",
+        "tese",
+        "publico-alvo",
+        "público-alvo",
+        "canais",
+        "riscos",
+        "persona",
+        "marketing",
+        "campanha",
+    )
+    marketing_roles = {"research", "strategy", "content", "seo", "social", "analytics"}
+    assigned_role = str(subtask.get("assigned_role") or "").strip().lower()
     complex_markers = (
         "frontend",
         "react",
@@ -61,7 +78,7 @@ def can_handle_document_delivery(subtask: dict[str, Any]) -> bool:
     )
     return (
         any(marker in request_source for marker in doc_markers)
-        and "fora do repositorio iris" in request_source
+        and ("fora do repositorio iris" in request_source or assigned_role in marketing_roles)
         and not any(marker in context_source for marker in complex_markers)
     )
 
@@ -86,11 +103,31 @@ def execute_document_delivery(
     project_root.mkdir(parents=True, exist_ok=True)
     (project_root / "docs").mkdir(parents=True, exist_ok=True)
 
-    files = {
-        "README.md": _document_project_readme(task_id, project_root.name),
-        "docs/TECHNICAL_REPORT.md": _technical_report_markdown(subtask),
-        "docs/RUNBOOK.md": _document_runbook_markdown(),
-    }
+    if _is_marketing_role(agent_role):
+        files = {
+            "README.md": _marketing_project_readme(task_id, project_root.name, agent_role),
+            "docs/MARKETING_BRIEF.md": _marketing_brief_markdown(subtask),
+            "docs/GO_TO_MARKET.md": _go_to_market_markdown(subtask),
+        }
+        commit_message = "Add deterministic marketing brief"
+        validation_factory = _validate_marketing_document_delivery
+        risks = [
+            "hipoteses de mercado precisam ser validadas com dados externos antes de investimento alto",
+            "github_remote_status: pending_or_unavailable",
+        ]
+    else:
+        files = {
+            "README.md": _document_project_readme(task_id, project_root.name),
+            "docs/TECHNICAL_REPORT.md": _technical_report_markdown(subtask),
+            "docs/RUNBOOK.md": _document_runbook_markdown(),
+        }
+        commit_message = "Add operational report for Redis and PicoClaw"
+        validation_factory = _validate_document_delivery
+        risks = [
+            "redis segue sem persistencia real neste ambiente local",
+            "github_remote_status: pending_or_unavailable",
+        ]
+
     for relative_path, content in files.items():
         target = project_root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -101,9 +138,8 @@ def execute_document_delivery(
         _git(project_root, ["config", "user.name", "IRIS Agent"])
         _git(project_root, ["config", "user.email", "iris-agents@local"])
 
-    validations = _validate_document_delivery(project_root)
+    validations = validation_factory(project_root)
     _git(project_root, ["add", "--", *files.keys()])
-    commit_message = "Add operational report for Redis and PicoClaw"
     commit = _git(project_root, ["commit", "-m", commit_message], check=False)
     if commit.returncode != 0 and "nothing to commit" not in (commit.stdout + commit.stderr).lower():
         raise RuntimeError((commit.stderr or commit.stdout or "git commit failed").strip())
@@ -133,8 +169,7 @@ def execute_document_delivery(
         f"  sha: {sha}\n"
         f"  pushed: {'true' if pushed else 'false'}\n"
         "risks:\n"
-        "- redis segue sem persistencia real neste ambiente local\n"
-        "- github_remote_status: pending_or_unavailable\n"
+        f"{chr(10).join(f'- {risk}' for risk in risks)}\n"
         "next_handoff: none\n"
     )
 
@@ -860,6 +895,10 @@ def _remote_url_with_token(remote_url: str, token: str) -> str:
     return remote_url
 
 
+def _is_marketing_role(agent_role: str) -> bool:
+    return agent_role in {"research", "strategy", "content", "seo", "social", "analytics"}
+
+
 def _validate_document_delivery(project_root: Path) -> list[dict[str, str]]:
     report = (project_root / "docs" / "TECHNICAL_REPORT.md").read_text(encoding="utf-8", errors="replace")
     runbook = (project_root / "docs" / "RUNBOOK.md").read_text(encoding="utf-8", errors="replace")
@@ -872,6 +911,36 @@ def _validate_document_delivery(project_root: Path) -> list[dict[str, str]]:
             "command": "runbook contains health checks and operational commands",
             "result": "passed"
             if "GET /health" in runbook and "18790" in runbook and "redis" in runbook.lower()
+            else "failed",
+        },
+    ]
+    status = _git(project_root, ["status", "--short"], check=False)
+    checks.append(
+        {"command": "git status --short", "result": "passed" if status.returncode == 0 else "failed"}
+    )
+    return checks
+
+
+def _validate_marketing_document_delivery(project_root: Path) -> list[dict[str, str]]:
+    brief = (project_root / "docs" / "MARKETING_BRIEF.md").read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+    gtm = (project_root / "docs" / "GO_TO_MARKET.md").read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+    checks = [
+        {
+            "command": "marketing brief contains thesis audience channels and risks",
+            "result": "passed"
+            if all(marker in brief for marker in ("Tese", "Publico-alvo", "Canais", "Riscos"))
+            else "failed",
+        },
+        {
+            "command": "go-to-market contains positioning metrics and launch plan",
+            "result": "passed"
+            if all(marker in gtm for marker in ("Posicionamento", "Metricas", "Plano de lancamento"))
             else "failed",
         },
     ]
@@ -897,6 +966,98 @@ Projeto standalone gerado pelo executor deterministico do IRIS para uma entrega 
 
 - task_id: `{task_id}`
 - entrega fora do repositorio principal do IRIS
+"""
+
+
+def _marketing_project_readme(task_id: str, project_name: str, agent_role: str) -> str:
+    return f"""# {project_name}
+
+Projeto standalone gerado pelo executor deterministico de marketing do IRIS.
+
+## Escopo
+
+- briefing de marketing em markdown
+- go-to-market inicial
+- validacao objetiva de secoes essenciais
+
+## Evidencia
+
+- task_id: `{task_id}`
+- agente responsavel: `{agent_role}`
+- entrega fora do repositorio principal do IRIS
+"""
+
+
+def _marketing_brief_markdown(subtask: dict[str, Any]) -> str:
+    request = str(subtask.get("description") or "").strip()
+    return f"""# Marketing Brief
+
+## Pedido
+
+{request}
+
+## Tese
+
+Produtos que automatizam insights de codigo ganham aderencia quando reduzem o tempo entre descoberta tecnica e decisao de produto. A proposta premium deve vender clareza operacional, velocidade de validacao e menor desperdicio de engenharia.
+
+## Publico-alvo
+
+- CTOs e heads de engenharia em empresas SaaS
+- Founders tecnicos buscando novas linhas de produto
+- Times de plataforma que precisam transformar pesquisa de repositorios em backlog priorizado
+- Consultorias de software que querem empacotar discovery tecnico como oferta recorrente
+
+## Canais
+
+- Conteudo tecnico no LinkedIn com provas de antes/depois
+- Artigos comparando discovery manual vs pipeline automatizado
+- Demos curtas para comunidades de builders e engenharia
+- Parcerias com consultorias que ja auditam repositorios e produto
+
+## Riscos
+
+- Sinal de mercado fraco se os insights nao resultarem em entregas reais
+- Baixa confianca se nao houver fontes, evidencias e repositorios versionados
+- Concorrencia com ferramentas genericas de AI coding se o posicionamento nao enfatizar produto e mercado
+
+## Proposta de valor
+
+Transformar pesquisa tecnica em aplicacoes versionadas, com evidencias de entrega e leitura de aderencia comercial.
+"""
+
+
+def _go_to_market_markdown(subtask: dict[str, Any]) -> str:
+    return """# Go-To-Market
+
+## Posicionamento
+
+Fabrica de produtos guiada por inteligencia tecnica: identifica sinais em GitHub, GitLab e Hugging Face, prioriza oportunidades e cria MVPs versionados com evidencia operacional.
+
+## Oferta inicial
+
+- Diagnostico de oportunidades tecnicas
+- Ranking de aplicacoes com aderencia de mercado
+- Scaffold funcional com repositorio dedicado
+- Relatorio de riscos, canais e metricas de validacao
+
+## Metricas
+
+- taxa de insights convertidos em projeto
+- tempo entre insight e primeiro commit
+- percentual de projetos com push remoto
+- numero de leads qualificados por demo
+- validacoes de interesse por segmento
+
+## Plano de lancamento
+
+1. Publicar 3 estudos de caso com insight, decisao e MVP gerado.
+2. Rodar campanha de outbound para CTOs e founders tecnicos.
+3. Oferecer auditoria inicial de repositorio como entrada comercial.
+4. Medir conversao de briefing para piloto pago.
+
+## Criterio de continuidade
+
+O produto avanca se gerar interesse qualificado, prova de reducao de tempo de discovery e pelo menos um piloto com repositorio dedicado criado automaticamente.
 """
 
 
