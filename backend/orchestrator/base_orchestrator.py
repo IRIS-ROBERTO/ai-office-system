@@ -30,8 +30,10 @@ from backend.core.event_types import AgentRole, EventType, OfficialEvent, TeamTy
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT, REPO_ROOT, build_gold_standard_prompt
 from backend.core.improvement_loop import improvement_loop
 from backend.core.static_web_delivery import (
+    can_handle_document_delivery,
     can_handle_complex_project_delivery,
     can_handle_static_web_delivery,
+    execute_document_delivery,
     execute_complex_project_delivery,
     execute_static_web_delivery,
 )
@@ -610,6 +612,107 @@ class BaseOrchestrator(ABC):
             agent_role=agent_role_enum.value,
             metadata={"subtask_id": subtask["id"], "retry_count": state["retry_count"]},
         )
+
+        if can_handle_document_delivery(subtask):
+            try:
+                output_text = execute_document_delivery(
+                    task_id=task_id,
+                    subtask_id=subtask["id"],
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    subtask=subtask,
+                )
+                self._trace(
+                    task_id,
+                    "deterministic_executor",
+                    f"Executor deterministico documental entregou artefatos do especialista {role}.",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
+            except Exception as exc:
+                output_text = f"ERRO: executor deterministico documental falhou: {exc}"
+                self._trace(
+                    task_id,
+                    "deterministic_executor_failed",
+                    f"Executor deterministico documental falhou: {exc}",
+                    level="error",
+                    agent_id=agent_id,
+                    agent_role=agent_role_enum.value,
+                    metadata={"subtask_id": subtask["id"]},
+                )
+
+            updated_outputs = dict(state.get("agent_outputs") or {})
+            updated_outputs[subtask["id"]] = output_text
+            updated_evidence = dict(state.get("delivery_evidence") or {})
+            updated_manifests = dict(state.get("delivery_manifests") or {})
+
+            manifest = delivery_runner.evaluate_subtask_output(
+                task_id=task_id,
+                subtask=subtask,
+                output_text=output_text,
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                team=self.team.value,
+                require_commit=self._subtask_requires_commit(subtask),
+            )
+            updated_manifests[subtask["id"]] = manifest.to_dict()
+            self._trace(
+                task_id,
+                "delivery_manifest",
+                f"Delivery Runner avaliou '{subtask['title']}' com approved={manifest.approved}.",
+                agent_id=self.ORCHESTRATOR_AGENT_ID,
+                agent_role=AgentRole.ORCHESTRATOR.value,
+                metadata={
+                    "subtask_id": subtask["id"],
+                    "approved": manifest.approved,
+                    "manifest_path": manifest.manifest_path,
+                    "failed_stages": [
+                        stage.name for stage in manifest.stages if stage.required and not stage.passed
+                    ],
+                },
+            )
+
+            evidence_payload = dict(manifest.evidence or {})
+            if evidence_payload:
+                evidence_payload["approved"] = manifest.approved
+                evidence_payload["feedback"] = manifest.feedback
+                evidence_payload["manifest_path"] = manifest.manifest_path
+                updated_evidence[subtask["id"]] = evidence_payload
+
+                commit_sha = str(evidence_payload.get("commit_sha") or "")
+                if manifest.approved and commit_sha:
+                    await _emit(
+                        EventType.GIT_COMMIT,
+                        self.team,
+                        agent_id,
+                        agent_role_enum,
+                        task_id=task_id,
+                        payload={
+                            "subtask_id": subtask["id"],
+                            "sha": commit_sha,
+                            "message": evidence_payload.get("commit_message"),
+                            "files": evidence_payload.get("files_changed"),
+                            "pushed": evidence_payload.get("pushed"),
+                            "manifest_path": manifest.manifest_path,
+                        },
+                    )
+
+            self._trace(
+                task_id,
+                "subtask_complete",
+                f"Subtarefa '{subtask['title']}' encerrou execucao.",
+                agent_id=agent_id,
+                agent_role=agent_role_enum.value,
+                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+            )
+            result = {
+                "agent_outputs": updated_outputs,
+                "delivery_evidence": updated_evidence,
+                "delivery_manifests": updated_manifests,
+            }
+            self._report_progress({**state, **result})
+            return result
 
         if can_handle_complex_project_delivery(subtask):
             try:

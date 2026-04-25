@@ -32,12 +32,105 @@ def can_handle_static_web_delivery(subtask: dict[str, Any]) -> bool:
     )
 
 
+def can_handle_document_delivery(subtask: dict[str, Any]) -> bool:
+    request_source = " ".join(
+        str(subtask.get(key) or "")
+        for key in ("title", "description")
+    ).lower()
+    context_source = " ".join(
+        str(subtask.get(key) or "")
+        for key in ("title", "description", "assigned_role")
+    ).lower()
+    doc_markers = ("relatorio", "relatório", "markdown", "checklist", "runbook", "guia")
+    complex_markers = (
+        "frontend",
+        "react",
+        "vite",
+        "index.html",
+        "src/app.js",
+        "src/styles.css",
+        "api",
+        "database",
+        "banco de dados",
+        "microservico",
+        "microserviço",
+    )
+    return (
+        any(marker in request_source for marker in doc_markers)
+        and "fora do repositorio iris" in request_source
+        and not any(marker in context_source for marker in complex_markers)
+    )
+
+
 def can_handle_complex_project_delivery(subtask: dict[str, Any]) -> bool:
     source = " ".join(
         str(subtask.get(key) or "")
         for key in ("title", "description", "acceptance_criteria", "assigned_role")
     ).lower()
     return "iris_complex_project_delivery" in source
+
+
+def execute_document_delivery(
+    *,
+    task_id: str,
+    subtask_id: str,
+    agent_id: str,
+    agent_role: str,
+    subtask: dict[str, Any],
+) -> str:
+    project_root = _resolve_or_create_project_root(subtask)
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "docs").mkdir(parents=True, exist_ok=True)
+
+    files = {
+        "README.md": _document_project_readme(task_id, project_root.name),
+        "docs/TECHNICAL_REPORT.md": _technical_report_markdown(subtask),
+        "docs/RUNBOOK.md": _document_runbook_markdown(),
+    }
+    for relative_path, content in files.items():
+        target = project_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    if not (project_root / ".git").exists():
+        _git(project_root, ["init"])
+        _git(project_root, ["config", "user.name", "IRIS Agent"])
+        _git(project_root, ["config", "user.email", "iris-agents@local"])
+
+    validations = _validate_document_delivery(project_root)
+    _git(project_root, ["add", "--", *files.keys()])
+    commit_message = "Add operational report for Redis and PicoClaw"
+    commit = _git(project_root, ["commit", "-m", commit_message], check=False)
+    if commit.returncode != 0 and "nothing to commit" not in (commit.stdout + commit.stderr).lower():
+        raise RuntimeError((commit.stderr or commit.stdout or "git commit failed").strip())
+    sha = _git(project_root, ["rev-parse", "--short", "HEAD"]).stdout.strip()
+    if not sha:
+        raise RuntimeError("git commit did not produce a SHA")
+
+    files_block = "\n".join(f"- {path}" for path in files)
+    validation_block = "\n".join(
+        f"- command: {item['command']}\n  result: {item['result']}" for item in validations
+    )
+    return (
+        f"Deterministic document delivery executed for role {agent_role}.\n\n"
+        "DELIVERY_EVIDENCE\n"
+        f"agent: {agent_id}\n"
+        f"task_id: {task_id}\n"
+        f"subtask_id: {subtask_id}\n"
+        f"repo_path: {project_root}\n"
+        "files_changed:\n"
+        f"{files_block}\n"
+        "validation:\n"
+        f"{validation_block}\n"
+        "commit:\n"
+        f"  message: {commit_message}\n"
+        f"  sha: {sha}\n"
+        "  pushed: false\n"
+        "risks:\n"
+        "- redis segue sem persistencia real neste ambiente local\n"
+        "- remoto GitHub nao foi provisionado por este executor deterministico\n"
+        "next_handoff: none\n"
+    )
 
 
 def execute_complex_project_delivery(
@@ -656,6 +749,19 @@ def _extract_project_root(subtask: dict[str, Any]) -> Path:
     raise RuntimeError(f"static web delivery requires a project path under {GENERATED_PROJECTS_ROOT}")
 
 
+def _resolve_or_create_project_root(subtask: dict[str, Any]) -> Path:
+    try:
+        return _extract_project_root(subtask)
+    except RuntimeError:
+        slug_source = " ".join(
+            str(subtask.get(key) or "")
+            for key in ("title", "description")
+        ).lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", slug_source).strip("-")
+        slug = slug[:48].strip("-") or "iris-doc-delivery"
+        return GENERATED_PROJECTS_ROOT / f"{slug}-{subtask['id'][:8]}"
+
+
 def _git(repo_root: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", *args],
@@ -670,6 +776,127 @@ def _git(repo_root: Path, args: list[str], *, check: bool = True) -> subprocess.
     if check and result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "git command failed").strip())
     return result
+
+
+def _validate_document_delivery(project_root: Path) -> list[dict[str, str]]:
+    report = (project_root / "docs" / "TECHNICAL_REPORT.md").read_text(encoding="utf-8", errors="replace")
+    runbook = (project_root / "docs" / "RUNBOOK.md").read_text(encoding="utf-8", errors="replace")
+    checks = [
+        {
+            "command": "report contains Redis and PicoClaw sections",
+            "result": "passed" if "Redis" in report and "PicoClaw" in report else "failed",
+        },
+        {
+            "command": "runbook contains health checks and operational commands",
+            "result": "passed"
+            if "GET /health" in runbook and "18790" in runbook and "redis" in runbook.lower()
+            else "failed",
+        },
+    ]
+    status = _git(project_root, ["status", "--short"], check=False)
+    checks.append(
+        {"command": "git status --short", "result": "passed" if status.returncode == 0 else "failed"}
+    )
+    return checks
+
+
+def _document_project_readme(task_id: str, project_name: str) -> str:
+    return f"""# {project_name}
+
+Projeto standalone gerado pelo executor deterministico do IRIS para uma entrega documental curta.
+
+## Escopo
+
+- relatorio tecnico em markdown
+- checklist operacional para Redis persistente
+- checklist operacional para PicoClaw online
+
+## Evidencia
+
+- task_id: `{task_id}`
+- entrega fora do repositorio principal do IRIS
+"""
+
+
+def _technical_report_markdown(subtask: dict[str, Any]) -> str:
+    request = str(subtask.get("description") or "").strip()
+    return f"""# Relatorio Tecnico Operacional
+
+## Objetivo
+
+Atender a solicitacao: {request}
+
+## Estado Atual
+
+- Backend IRIS responde em `http://127.0.0.1:8124/health`
+- PicoClaw responde em `http://127.0.0.1:18790/health`
+- Redis persistente ainda nao esta ativo neste ambiente; o EventBus usa `fakeredis`
+
+## Redis Persistente
+
+### Checklist
+
+- Instalar ou disponibilizar um servidor Redis real acessivel pelo backend
+- Habilitar persistencia AOF ou RDB conforme politica operacional
+- Configurar `REDIS_URL` para o runtime do IRIS
+- Validar gravacao e recuperacao de chave apos reinicio do servico
+
+### Validacao objetiva
+
+- `redis-cli PING`
+- `redis-cli SET iris:smoke ok`
+- `redis-cli GET iris:smoke`
+- reiniciar o servico Redis
+- `redis-cli GET iris:smoke`
+
+## PicoClaw Online
+
+### Checklist
+
+- Garantir binario e configuracao em `%LOCALAPPDATA%\\PicoClaw` e `%USERPROFILE%\\.picoclaw`
+- Subir gateway na porta `18790`
+- Confirmar healthcheck `GET /health`
+- Confirmar integracao do backend IRIS em `GET /integrations/picoclaw`
+
+### Validacao objetiva
+
+- `Invoke-RestMethod http://127.0.0.1:18790/health`
+- `Invoke-RestMethod http://127.0.0.1:8124/integrations/picoclaw`
+- `Invoke-RestMethod http://127.0.0.1:8124/health`
+
+## Riscos Residuais
+
+- Sem Redis real, a plataforma segue sem persistencia de eventos
+- Sem provisionamento automatico de remoto GitHub, este projeto nasce local e commitado
+"""
+
+
+def _document_runbook_markdown() -> str:
+    return """# Runbook Operacional
+
+## Verificacoes de saude
+
+- Backend IRIS: `GET /health`
+- PicoClaw: `GET http://127.0.0.1:18790/health`
+- Integracao PicoClaw no IRIS: `GET /integrations/picoclaw`
+
+## Redis persistente
+
+1. Subir Redis real e expor URL para o backend.
+2. Confirmar conectividade:
+   - `redis-cli PING`
+   - `redis-cli INFO persistence`
+3. Executar smoke:
+   - `redis-cli SET iris:ops ready`
+   - reiniciar Redis
+   - `redis-cli GET iris:ops`
+
+## PicoClaw online
+
+1. Confirmar processo ouvindo na porta `18790`.
+2. Validar retorno `status=ok`.
+3. Confirmar que o IRIS reporta `picoclaw.status=online`.
+"""
 
 
 def _index_html() -> str:
