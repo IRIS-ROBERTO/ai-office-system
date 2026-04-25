@@ -243,6 +243,7 @@ class DeliveryRunner:
                 metadata={
                     "files_changed": evidence.files_changed,
                     "repo_path": evidence.repo_path,
+                    "github_repo_url": evidence.github_repo_url,
                 },
             ),
             DeliveryStage(
@@ -260,6 +261,7 @@ class DeliveryRunner:
                     "commit_sha": evidence.commit_sha,
                     "commit_message": evidence.commit_message,
                     "pushed": evidence.pushed,
+                    "github_repo_url": evidence.github_repo_url,
                 },
             ),
         ]
@@ -420,6 +422,7 @@ class DeliveryRunner:
                 f"task_id: {task_id}\n"
                 f"subtask_id: {subtask_id}\n"
                 f"repo_path: {repo_root}\n"
+                "github_repo_url: not_provisioned\n"
                 "files_changed:\n"
                 f"{files_block}\n"
                 "validation:\n"

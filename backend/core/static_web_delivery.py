@@ -123,6 +123,7 @@ def execute_document_delivery(
         f"task_id: {task_id}\n"
         f"subtask_id: {subtask_id}\n"
         f"repo_path: {project_root}\n"
+        f"github_repo_url: {remote_url.removesuffix('.git') if remote_url else 'not_provisioned'}\n"
         "files_changed:\n"
         f"{files_block}\n"
         "validation:\n"
@@ -133,7 +134,7 @@ def execute_document_delivery(
         f"  pushed: {'true' if pushed else 'false'}\n"
         "risks:\n"
         "- redis segue sem persistencia real neste ambiente local\n"
-        f"- github_repo_url: {remote_url.removesuffix('.git') if remote_url else 'not_provisioned'}\n"
+        "- github_remote_status: pending_or_unavailable\n"
         "next_handoff: none\n"
     )
 
@@ -187,6 +188,7 @@ def execute_complex_project_delivery(
         f"task_id: {task_id}\n"
         f"subtask_id: {subtask_id}\n"
         f"repo_path: {project_root}\n"
+        f"github_repo_url: {remote_url.removesuffix('.git') if remote_url else 'not_provisioned'}\n"
         "files_changed:\n"
         f"{files_block}\n"
         "validation:\n"
@@ -197,7 +199,7 @@ def execute_complex_project_delivery(
         f"  pushed: {'true' if pushed else 'false'}\n"
         "risks:\n"
         "- none\n"
-        f"- github_repo_url: {remote_url.removesuffix('.git') if remote_url else 'not_provisioned'}\n"
+        "- github_remote_status: pending_or_unavailable\n"
         "next_handoff: none\n"
     )
 
@@ -247,6 +249,7 @@ def execute_static_web_delivery(
         f"task_id: {task_id}\n"
         f"subtask_id: {subtask_id}\n"
         f"repo_path: {project_root}\n"
+        f"github_repo_url: {remote_url.removesuffix('.git') if remote_url else 'not_provisioned'}\n"
         "files_changed:\n"
         f"{files_block}\n"
         "validation:\n"
@@ -262,7 +265,7 @@ def execute_static_web_delivery(
         f"  pushed: {'true' if pushed else 'false'}\n"
         "risks:\n"
         "- none\n"
-        f"- github_repo_url: {remote_url.removesuffix('.git') if remote_url else 'not_provisioned'}\n"
+        "- github_remote_status: pending_or_unavailable\n"
         "next_handoff: none\n"
     )
 

@@ -38,6 +38,7 @@ class DeliveryEvidence:
     commit_message: str = ""
     commit_sha: str = ""
     repo_path: str = ""
+    github_repo_url: str = ""
     pushed: bool | None = None
     risks: list[str] = field(default_factory=list)
     next_handoff: str = ""
@@ -74,6 +75,7 @@ def parse_delivery_evidence(output_text: str) -> DeliveryEvidence | None:
     evidence.task_id = _read_scalar(source, "task_id")
     evidence.subtask_id = _read_scalar(source, "subtask_id")
     evidence.repo_path = _read_scalar(source, "repo_path")
+    evidence.github_repo_url = _read_scalar(source, "github_repo_url")
     evidence.commit_message = _read_nested_or_scalar(source, "commit", "message")
     evidence.commit_sha = _read_nested_or_scalar(source, "commit", "sha")
     evidence.next_handoff = _read_scalar(source, "next_handoff")
