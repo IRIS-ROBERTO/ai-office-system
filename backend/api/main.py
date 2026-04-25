@@ -45,6 +45,7 @@ from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_h
 from backend.core.agent_personality import get_agent_config, update_agent_config
 from backend.core.agent_capability_matrix import build_agent_capability, build_agent_capability_matrix
 from backend.core.agent_runtime_gateway import get_runtime_gateway_status
+from backend.core.github_provisioning import get_github_provisioning_status
 from backend.core.memory_gateway import memory_gateway
 from backend.core.production_readiness import build_production_readiness_report
 from backend.core.tool_governance import get_role_tool_policy, list_tool_policies
@@ -1084,6 +1085,12 @@ async def get_picoclaw_integration_status():
 async def get_agent_runtime_gateway():
     """Retorna provedores de runtime avaliados e a decisão operacional ativa."""
     return await get_runtime_gateway_status()
+
+
+@app.get("/integrations/github")
+async def get_github_integration_status():
+    """Diagnostico nao destrutivo de token, owner e permissao GitHub para publicacao."""
+    return get_github_provisioning_status()
 
 
 @app.get("/integrations/memory-gateway")

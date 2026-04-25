@@ -120,7 +120,6 @@ def execute_document_delivery(
         validation_factory = _validate_marketing_document_delivery
         risks = [
             "hipoteses de mercado precisam ser validadas com dados externos antes de investimento alto",
-            "github_remote_status: pending_or_unavailable",
         ]
     else:
         files = {
@@ -132,7 +131,6 @@ def execute_document_delivery(
         validation_factory = _validate_document_delivery
         risks = [
             "redis segue sem persistencia real neste ambiente local",
-            "github_remote_status: pending_or_unavailable",
         ]
 
     for relative_path, content in files.items():
@@ -154,6 +152,7 @@ def execute_document_delivery(
     if not sha:
         raise RuntimeError("git commit did not produce a SHA")
     remote_url, pushed = _ensure_remote_and_push(project_root, branch="main")
+    risks.extend(_github_publish_risks(remote_url, pushed))
 
     files_block = "\n".join(f"- {path}" for path in files)
     validation_block = "\n".join(
@@ -217,6 +216,7 @@ def execute_complex_project_delivery(
     if not sha:
         raise RuntimeError("git commit did not produce a SHA")
     remote_url, pushed = _ensure_remote_and_push(project_root, branch="main")
+    risks = _github_publish_risks(remote_url, pushed)
 
     files_block = "\n".join(f"- {path}" for path in files)
     validation_block = "\n".join(
@@ -240,8 +240,7 @@ def execute_complex_project_delivery(
         f"  sha: {sha}\n"
         f"  pushed: {'true' if pushed else 'false'}\n"
         "risks:\n"
-        "- none\n"
-        "- github_remote_status: pending_or_unavailable\n"
+        f"{chr(10).join(f'- {risk}' for risk in risks)}\n"
         "next_handoff: none\n"
     )
 
@@ -282,6 +281,7 @@ def execute_static_web_delivery(
     if not sha:
         raise RuntimeError("git commit did not produce a SHA")
     remote_url, pushed = _ensure_remote_and_push(project_root, branch="main")
+    risks = _github_publish_risks(remote_url, pushed)
 
     files_block = "\n".join(f"- {path}" for path in files)
     return (
@@ -306,10 +306,17 @@ def execute_static_web_delivery(
         f"  sha: {sha}\n"
         f"  pushed: {'true' if pushed else 'false'}\n"
         "risks:\n"
-        "- none\n"
-        "- github_remote_status: pending_or_unavailable\n"
+        f"{chr(10).join(f'- {risk}' for risk in risks)}\n"
         "next_handoff: none\n"
     )
+
+
+def _github_publish_risks(remote_url: str | None, pushed: bool) -> list[str]:
+    if pushed:
+        return ["none"]
+    if remote_url:
+        return ["github_remote_status: push_failed_or_unconfirmed"]
+    return ["github_remote_status: not_provisioned"]
 
 
 def _complex_commit_message(agent_role: str) -> str:
@@ -835,8 +842,6 @@ def _git(repo_root: Path, args: list[str], *, check: bool = True) -> subprocess.
 def _ensure_remote_and_push(repo_root: Path, *, branch: str) -> tuple[str | None, bool]:
     if not _is_generated_project_repo(repo_root):
         return None, False
-    if not settings.GITHUB_TOKEN:
-        return None, False
 
     try:
         remote = _git(repo_root, ["remote", "get-url", "origin"], check=False)
@@ -844,8 +849,12 @@ def _ensure_remote_and_push(repo_root: Path, *, branch: str) -> tuple[str | None
         if remote.returncode != 0 or not remote_url:
             remote_url = _ensure_generated_project_remote(repo_root)
 
-        push_url = _remote_url_with_token(remote_url, settings.GITHUB_TOKEN)
-        push_result = _git(repo_root, ["push", "-u", push_url, f"HEAD:{branch}"], check=False)
+        push_result = None
+        if settings.GITHUB_TOKEN and "github.com" in remote_url:
+            push_url = _remote_url_with_token(remote_url, settings.GITHUB_TOKEN)
+            push_result = _git(repo_root, ["push", "-u", push_url, f"HEAD:{branch}"], check=False)
+        if push_result is None or push_result.returncode != 0:
+            push_result = _git(repo_root, ["push", "-u", "origin", f"HEAD:{branch}"], check=False)
         if push_result.returncode != 0:
             return remote_url, False
         return remote_url, True
@@ -868,21 +877,46 @@ def _ensure_generated_project_remote(repo_root: Path) -> str:
 
     repo_name = re.sub(r"[^a-z0-9]+", "-", repo_root.name.lower()).strip("-") or "iris-project"
     remote_url = f"https://github.com/{owner}/{repo_name}.git"
-    headers = {
-        "Authorization": f"token {settings.GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json",
-    }
-    payload = {
-        "name": repo_name,
-        "description": f"Projeto gerado pelo IRIS - {repo_name}",
-        "private": False,
-        "auto_init": False,
-    }
+    created_or_exists = False
+    api_error = ""
 
-    with httpx.Client(headers=headers, timeout=30) as client:
-        response = client.post("https://api.github.com/user/repos", json=payload)
-        if response.status_code not in (201, 422):
-            response.raise_for_status()
+    if settings.GITHUB_TOKEN:
+        headers = {
+            "Authorization": f"token {settings.GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        payload = {
+            "name": repo_name,
+            "description": f"Projeto gerado pelo IRIS - {repo_name}",
+            "private": False,
+            "auto_init": False,
+        }
+
+        with httpx.Client(headers=headers, timeout=30) as client:
+            response = client.post("https://api.github.com/user/repos", json=payload)
+            if response.status_code in (201, 422):
+                created_or_exists = True
+            else:
+                api_error = f"GitHub API returned HTTP {response.status_code}"
+
+    if not created_or_exists:
+        gh_result = subprocess.run(
+            ["gh", "repo", "create", f"{owner}/{repo_name}", "--public", "--source", str(repo_root), "--remote", "origin"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=60,
+        )
+        gh_output = (gh_result.stdout + "\n" + gh_result.stderr).lower()
+        if gh_result.returncode == 0 or "already exists" in gh_output or "remote origin already exists" in gh_output:
+            created_or_exists = True
+        elif api_error:
+            raise RuntimeError(f"{api_error}; gh fallback failed: {(gh_result.stderr or gh_result.stdout).strip()}")
+        else:
+            raise RuntimeError((gh_result.stderr or gh_result.stdout or "github repo create failed").strip())
 
     add_remote = _git(repo_root, ["remote", "add", "origin", remote_url], check=False)
     message = ((add_remote.stderr or "") + (add_remote.stdout or "")).lower()

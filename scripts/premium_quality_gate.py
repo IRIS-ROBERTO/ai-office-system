@@ -118,12 +118,19 @@ def validate_backend_bootstrap() -> None:
         if research.status_code != 200:
             raise RuntimeError(f"/research/stats returned HTTP {research.status_code}")
 
+        github = client.get("/integrations/github", timeout=20)
+        if github.status_code != 200:
+            raise RuntimeError(f"/integrations/github returned HTTP {github.status_code}")
+        if not isinstance(github.json().get("blockers"), list):
+            raise RuntimeError("/integrations/github returned malformed diagnostics")
+
 
 def validate_live_api(api_base: str) -> None:
     api = api_base.rstrip("/")
     health = _get_json(f"{api}/health", timeout=20)
     readiness = _get_json(f"{api}/production-readiness", timeout=30)
     memory = _get_json(f"{api}/integrations/memory-gateway", timeout=10)
+    github = _get_json(f"{api}/integrations/github", timeout=20)
 
     if health.get("api") != "online":
         raise RuntimeError("API health is not online")
@@ -133,6 +140,8 @@ def validate_live_api(api_base: str) -> None:
         raise RuntimeError(f"production readiness blocked: {readiness.get('status')}")
     if memory.get("governance", {}).get("secret_screening") is not True:
         raise RuntimeError("memory gateway secret screening is not enabled")
+    if not isinstance(github.get("blockers"), list):
+        raise RuntimeError("github integration diagnostics are malformed")
 
 
 def _get_json(url: str, *, timeout: int) -> dict:
