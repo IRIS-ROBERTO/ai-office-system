@@ -23,6 +23,7 @@ _RUNTIME_DIR = Path(".runtime")
 _ROOT = Path(__file__).resolve().parents[2]
 _FINDINGS_FILE = _RUNTIME_DIR / "research_findings.json"
 _CONFIG_FILE = _RUNTIME_DIR / "research_schedule_config.json"
+_IMPLEMENTATIONS_FILE = _RUNTIME_DIR / "research_insight_implementations.json"
 _PROMOTED_INSIGHTS_DIR = _ROOT / "docs" / "research-insights"
 _PRODUCT_CATS = {"produto_novo", "ia_generativa_mercado", "combinacoes_estrategicas"}
 _IRIS_CATS = {"novos_plugins", "integracao_llm", "memoria_rag", "automacao_workflow"}
@@ -75,6 +76,7 @@ _findings: list[dict[str, Any]] = []
 _schedule_config: dict[str, Any] = {}
 _is_running: bool = False
 _scheduler_task: asyncio.Task | None = None
+_implementations: dict[str, dict[str, Any]] = {}
 
 
 def _ensure_runtime_dir() -> None:
@@ -119,11 +121,31 @@ def _save_config(config: dict[str, Any]) -> None:
         logger.warning(f"[ResearchStore] Falha ao salvar config: {exc}")
 
 
+def _load_implementations() -> dict[str, dict[str, Any]]:
+    _ensure_runtime_dir()
+    if _IMPLEMENTATIONS_FILE.exists():
+        try:
+            data = json.loads(_IMPLEMENTATIONS_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning(f"[ResearchStore] Falha ao carregar implementacoes de insights: {exc}")
+    return {}
+
+
+def _save_implementations(items: dict[str, dict[str, Any]]) -> None:
+    _ensure_runtime_dir()
+    try:
+        _IMPLEMENTATIONS_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning(f"[ResearchStore] Falha ao salvar implementacoes de insights: {exc}")
+
+
 def initialize() -> None:
     """Inicializa o store carregando dados do disco."""
-    global _findings, _schedule_config
+    global _findings, _schedule_config, _implementations
     _findings = _load_findings()
     _schedule_config = _load_config()
+    _implementations = _load_implementations()
     logger.info(f"[ResearchStore] Inicializado com {len(_findings)} findings.")
 
 
@@ -718,6 +740,7 @@ def generate_insights() -> dict[str, Any]:
             "icon": cat["icon"],
             "total_found": len(cat["findings"]),
             "delivery_mode": classify_insight_delivery(cat_id),
+            "implementation": get_insight_implementation(cat_id),
             "recommendation": _generate_recommendation(cat_id, top5, len(cat["findings"])),
             "summary": _generate_summary(cat_id, top5, len(cat["findings"])),
             "product_potential": _score_product_potential(cat_id, top5, len(cat["findings"])),
@@ -745,6 +768,69 @@ def generate_insights() -> dict[str, Any]:
         "total_analyzed": len(_findings),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def get_insight_implementation(category_id: str) -> dict[str, Any]:
+    record = dict(_implementations.get(category_id) or {})
+    if not record:
+        return {
+            "status": "not_started",
+            "implemented": False,
+            "confirmed_at": None,
+            "method": None,
+            "evidence": {},
+            "success_criteria": [],
+        }
+    record.setdefault("implemented", record.get("status") == "implemented")
+    record.setdefault("success_criteria", [])
+    record.setdefault("evidence", {})
+    return record
+
+
+def mark_insight_implemented(
+    category_id: str,
+    *,
+    method: str,
+    evidence: dict[str, Any] | None = None,
+    success_criteria: list[str] | None = None,
+) -> dict[str, Any]:
+    """Persist a verified implementation marker for a SCOUT insight."""
+    payload = generate_insights()
+    insight = next(
+        (item for item in payload.get("insights", []) if item.get("category_id") == category_id),
+        None,
+    )
+    if not insight:
+        raise KeyError(category_id)
+
+    normalized_evidence = evidence or {}
+    record = {
+        "status": "implemented",
+        "implemented": True,
+        "category_id": category_id,
+        "title": insight.get("title"),
+        "method": method,
+        "confirmed_at": datetime.now(timezone.utc).isoformat(),
+        "delivery_mode": classify_insight_delivery(category_id),
+        "evidence": normalized_evidence,
+        "success_criteria": success_criteria or _success_criteria_for_method(method, normalized_evidence),
+    }
+    _implementations[category_id] = record
+    _save_implementations(_implementations)
+    return record
+
+
+def _success_criteria_for_method(method: str, evidence: dict[str, Any]) -> list[str]:
+    criteria = ["insight existe no SCOUT", "confirmacao persistida no runtime"]
+    if method == "promotion":
+        criteria.extend(["plano versionado criado", "commit_sha presente"])
+    elif method == "application_factory":
+        criteria.extend(["aplicacao gerada", "validacao objetiva aprovada", "commit_sha presente"])
+        if evidence.get("github_repo_url"):
+            criteria.append("repositorio remoto registrado")
+    elif method == "agent_execution":
+        criteria.extend(["tarefa dev aprovada", "tarefa marketing aprovada", "relatorios gerados"])
+    return criteria
 
 
 def classify_insight_delivery(category_id: str) -> dict[str, str]:

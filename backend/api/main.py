@@ -14,6 +14,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -1374,6 +1375,15 @@ async def promote_research_insight(category_id: str):
 
     pushed = await _push_iris_repo_to_github()
     result["pushed_to_github"] = pushed
+    result["implementation"] = research_store.mark_insight_implemented(
+        category_id,
+        method="promotion",
+        evidence={
+            "commit_sha": result.get("commit_sha"),
+            "repo_relative_path": result.get("repo_relative_path"),
+            "pushed_to_github": pushed,
+        },
+    )
     return result
 
 
@@ -1392,7 +1402,58 @@ async def create_research_application(category_id: str):
 
     if result.get("repo_strategy") == "iris_repository":
         result["pushed_to_github"] = await _push_iris_repo_to_github()
+    result["implementation"] = research_store.mark_insight_implemented(
+        category_id,
+        method="application_factory",
+        evidence={
+            "application_slug": result.get("application_slug"),
+            "application_path": result.get("application_path"),
+            "repo_path": result.get("repo_path"),
+            "repo_strategy": result.get("repo_strategy"),
+            "github_repo_url": result.get("github_repo_url"),
+            "commit_sha": result.get("commit_sha"),
+            "validation": result.get("validation"),
+            "provisioning_gate": result.get("provisioning_gate"),
+            "pushed_to_github": result.get("pushed_to_github"),
+        },
+    )
     return result
+
+
+@app.post("/research/insights/{category_id}/confirm-implemented")
+async def confirm_research_insight_implemented(category_id: str, body: dict[str, Any]):
+    """Marca um insight como implementado apenas quando ha evidencia verificavel."""
+    method = str(body.get("method") or "manual").strip() or "manual"
+    evidence = dict(body.get("evidence") or {})
+
+    dev_task_id = evidence.get("dev_task_id")
+    marketing_task_id = evidence.get("marketing_task_id")
+    if method == "agent_execution":
+        dev_state = _active_tasks.get(str(dev_task_id or ""))
+        marketing_state = _active_tasks.get(str(marketing_task_id or ""))
+        if not dev_state or not marketing_state:
+            raise HTTPException(status_code=400, detail="Tasks Dev e Marketing precisam existir no runtime.")
+        if not dev_state.get("quality_approved") or not marketing_state.get("quality_approved"):
+            raise HTTPException(status_code=400, detail="Tasks Dev e Marketing precisam estar aprovadas.")
+        if not dev_state.get("final_output") or not marketing_state.get("final_output"):
+            raise HTTPException(status_code=400, detail="Tasks Dev e Marketing precisam ter entrega final.")
+
+        evidence.update({
+            "dev_quality_approved": True,
+            "marketing_quality_approved": True,
+            "dev_report_path": dev_state.get("report_path"),
+            "marketing_report_path": marketing_state.get("report_path"),
+        })
+
+    try:
+        return research_store.mark_insight_implemented(
+            category_id,
+            method=method,
+            evidence=evidence,
+            success_criteria=body.get("success_criteria"),
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Insight '{category_id}' não encontrado.")
 
 
 # ---------------------------------------------------------------------------

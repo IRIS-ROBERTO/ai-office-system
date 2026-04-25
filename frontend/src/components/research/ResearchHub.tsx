@@ -104,6 +104,15 @@ type ProductPotential = {
   pitch: string;
 };
 
+type InsightImplementation = {
+  status: string;
+  implemented: boolean;
+  confirmed_at: string | null;
+  method: string | null;
+  evidence: Record<string, unknown>;
+  success_criteria: string[];
+};
+
 type InsightCategory = {
   category_id: string;
   title: string;
@@ -114,6 +123,7 @@ type InsightCategory = {
   recommendation: string;
   summary?: InsightSummary;
   product_potential?: ProductPotential;
+  implementation?: InsightImplementation;
   top_projects: InsightProject[];
 };
 
@@ -722,6 +732,7 @@ type TeamTask = {
   logs: LogEntry[];
   reportPath: string | null;
   githubUrl: string | null;
+  qualityApproved?: boolean;
 };
 type CategoryExecution = { dev: TeamTask; marketing: TeamTask };
 
@@ -905,9 +916,30 @@ const InsightsModal: React.FC<{
   const [creatingApp, setCreatingApp] = useState<string | null>(null);
   const [applicationResult, setApplicationResult] = useState<Record<string, string>>({});
   const [executions, setExecutions] = useState<Record<string, CategoryExecution>>({});
+  const [implementations, setImplementations] = useState<Record<string, InsightImplementation>>(
+    Object.fromEntries(data.insights.map((item) => [item.category_id, item.implementation]).filter(([, value]) => Boolean(value))) as Record<string, InsightImplementation>,
+  );
   const [selected, setSelected] = useState<string>(data.insights[0]?.category_id ?? '');
 
   const cat = data.insights.find((c) => c.category_id === selected) ?? data.insights[0];
+  const currentImplementation = cat ? (implementations[cat.category_id] ?? cat.implementation) : undefined;
+  const isImplemented = !!currentImplementation?.implemented;
+
+  const confirmImplemented = useCallback(async (
+    cat: InsightCategory,
+    method: string,
+    evidence: Record<string, unknown>,
+  ) => {
+    const resp = await fetch(`${apiUrl}/research/insights/${cat.category_id}/confirm-implemented`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, evidence }),
+    });
+    const json = await resp.json().catch(() => null);
+    if (!resp.ok) throw new Error(json?.detail || `Falha HTTP ${resp.status}`);
+    setImplementations(prev => ({ ...prev, [cat.category_id]: json as InsightImplementation }));
+    return json as InsightImplementation;
+  }, [apiUrl]);
 
   // Poll logs + status for both teams while tasks are in-flight
   useEffect(() => {
@@ -925,10 +957,13 @@ const InsightsModal: React.FC<{
         const sJson = sRes?.ok ? await sRes.json().catch(() => null) : null;
         const lJson = lRes?.ok ? await lRes.json().catch(() => null) : null;
         if (sJson || lJson) {
-          const newStatus: string = sJson?.status ?? '';
+          const qualityApproved = Boolean(sJson?.quality_approved);
+          const newStatus: string = sJson?.final_output
+            ? (qualityApproved ? 'done' : 'failed')
+            : (sJson ? 'running' : '');
           let reportPath: string | null = null;
           let githubUrl: string | null = null;
-          if (newStatus === 'done' && tid) {
+          if (sJson?.final_output && tid) {
             try {
               const rRes = await fetch(`${apiUrl}/tasks/${tid}/report`);
               if (rRes.ok) {
@@ -951,6 +986,7 @@ const InsightsModal: React.FC<{
                   logs: lJson?.items ?? current.logs,
                   reportPath: reportPath ?? current.reportPath,
                   githubUrl: githubUrl ?? current.githubUrl,
+                  qualityApproved,
                 },
               },
             };
@@ -963,6 +999,26 @@ const InsightsModal: React.FC<{
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
   }, [executions[selected]?.dev?.task_id, executions[selected]?.marketing?.task_id, selected, apiUrl]);
+
+  useEffect(() => {
+    if (!cat || isImplemented) return;
+    const exec = executions[cat.category_id];
+    if (!exec?.dev?.task_id || !exec?.marketing?.task_id) return;
+    if (!exec.dev.qualityApproved || !exec.marketing.qualityApproved) return;
+    if (!exec.dev.reportPath || !exec.marketing.reportPath) return;
+
+    confirmImplemented(cat, 'agent_execution', {
+      dev_task_id: exec.dev.task_id,
+      marketing_task_id: exec.marketing.task_id,
+      dev_report_path: exec.dev.reportPath,
+      marketing_report_path: exec.marketing.reportPath,
+    }).catch((error) => {
+      setPromotionResult(prev => ({
+        ...prev,
+        [cat.category_id]: `Falha ao confirmar implementação: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
+      }));
+    });
+  }, [cat, executions, isImplemented, confirmImplemented]);
 
   const handleExecute = async (cat: InsightCategory) => {
     setExecuting(cat.category_id);
@@ -1005,6 +1061,9 @@ const InsightsModal: React.FC<{
         ...prev,
         [cat.category_id]: `Commit ${json.commit_sha} · ${json.repo_relative_path}${json.pushed_to_github ? ' · GitHub atualizado' : ''}`,
       }));
+      if (json.implementation) {
+        setImplementations(prev => ({ ...prev, [cat.category_id]: json.implementation as InsightImplementation }));
+      }
     } catch (e) {
       setPromotionResult(prev => ({
         ...prev,
@@ -1028,6 +1087,9 @@ const InsightsModal: React.FC<{
         ...prev,
         [cat.category_id]: `App ${json.application_slug} · commit ${json.commit_sha} · ${repoSummary}${json.pushed_to_github ? ' · GitHub atualizado' : ''}`,
       }));
+      if (json.implementation) {
+        setImplementations(prev => ({ ...prev, [cat.category_id]: json.implementation as InsightImplementation }));
+      }
     } catch (e) {
       setApplicationResult(prev => ({
         ...prev,
@@ -1149,6 +1211,7 @@ const InsightsModal: React.FC<{
               const isActive = c.category_id === selected;
               const cExec = executions[c.category_id];
               const cPP = c.product_potential;
+              const cImplementation = implementations[c.category_id] ?? c.implementation;
               return (
                 <button
                   key={c.category_id}
@@ -1199,13 +1262,20 @@ const InsightsModal: React.FC<{
                     </div>
 
                     {/* Status badge */}
-                    {cExec?.dev?.reportPath || cExec?.marketing?.reportPath ? (
+                    {cImplementation?.implemented ? (
                       <div style={{
                         width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
                         background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: 9, color: '#22c55e', fontWeight: 900,
-                      }}>✓</div>
+                      }} title="Insight implementado">✓</div>
+                    ) : cExec?.dev?.reportPath || cExec?.marketing?.reportPath ? (
+                      <div style={{
+                        width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                        background: 'rgba(250,204,21,0.15)', border: '1px solid rgba(250,204,21,0.4)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 9, color: '#facc15', fontWeight: 900,
+                      }} title="Entrega gerada aguardando confirmação">!</div>
                     ) : cExec?.dev?.task_id ? (
                       <div style={{
                         width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
@@ -1259,7 +1329,7 @@ const InsightsModal: React.FC<{
               </div>
               <div>
                 <div style={{ fontSize: 10, color: cat.color, letterSpacing: 2.5, textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 }}>
-                  Insight de Evolução
+                  {isImplemented ? 'Insight implementado' : 'Insight de Evolução'}
                 </div>
                 <div style={{ fontSize: 26, fontWeight: 900, color: '#f1f5f9', letterSpacing: -0.5, lineHeight: 1.1 }}>
                   {cat.title}
@@ -1267,6 +1337,23 @@ const InsightsModal: React.FC<{
                 <div style={{ marginTop: 6, fontSize: 13, color: '#64748b', lineHeight: 1.5, maxWidth: 500 }}>
                   {cat.description}
                 </div>
+                {isImplemented && currentImplementation && (
+                  <div style={{
+                    marginTop: 12,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    borderRadius: 999,
+                    border: '1px solid rgba(34,197,94,0.35)',
+                    background: 'rgba(34,197,94,0.12)',
+                    color: '#22c55e',
+                    padding: '7px 12px',
+                    fontSize: 11,
+                    fontWeight: 800,
+                  }}>
+                    ✓ Implementado via {currentImplementation.method ?? 'validação'} · {formatDate(currentImplementation.confirmed_at)}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1339,6 +1426,11 @@ const InsightsModal: React.FC<{
                   {applicationResult[cat.category_id]}
                 </div>
               )}
+              {isImplemented && currentImplementation?.success_criteria?.length ? (
+                <div style={{ marginTop: 10, fontSize: 10, color: '#22c55e', textAlign: 'center', maxWidth: 420, lineHeight: 1.5 }}>
+                  Confirmado: {currentImplementation.success_criteria.slice(0, 3).join(' · ')}
+                </div>
+              ) : null}
             </div>
           </div>
 
