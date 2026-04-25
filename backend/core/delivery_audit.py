@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.core.delivery_retrospective import sanitize_manifest_payload
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -114,6 +115,7 @@ def _load_manifest_summaries(*, task_id: str | None = None) -> list[dict[str, An
 
 
 def _summarize_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[str, Any]:
+    manifest, _ = sanitize_manifest_payload(manifest)
     stages = manifest.get("stages") or []
     evidence = manifest.get("evidence") or {}
     failed_stages = [

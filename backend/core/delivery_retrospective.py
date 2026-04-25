@@ -7,6 +7,7 @@ platform can improve without relying on manual post-mortems.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[2]
 _RETRO_ROOT = _ROOT / ".runtime" / "delivery-retrospectives"
+_MANIFEST_ROOT = _ROOT / ".runtime" / "delivery-manifests"
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
 _STAGE_RULES: dict[str, dict[str, str]] = {
     "AGENT_OUTPUT": {
@@ -89,6 +92,62 @@ def list_retrospectives(*, task_id: str | None = None, limit: int = 50) -> dict[
         except Exception:
             continue
     return {"total": len(files), "returned": len(items), "items": items}
+
+
+def backfill_retrospectives_from_manifests(*, write_manifest_repairs: bool = True) -> dict[str, Any]:
+    if not _MANIFEST_ROOT.exists():
+        return {"processed": 0, "retrospectives_written": 0, "manifests_repaired": 0}
+
+    processed = 0
+    written = 0
+    repaired = 0
+    for manifest_path in sorted(_MANIFEST_ROOT.rglob("*.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        sanitized, changed = sanitize_manifest_payload(manifest)
+        if write_manifest_repairs and changed:
+            manifest_path.write_text(json.dumps(sanitized, ensure_ascii=True, indent=2), encoding="utf-8")
+            repaired += 1
+
+        retrospective = write_manifest_retrospective(sanitized)
+        if retrospective.get("retrospective_path"):
+            written += 1
+        processed += 1
+
+    return {
+        "processed": processed,
+        "retrospectives_written": written,
+        "manifests_repaired": repaired,
+    }
+
+
+def sanitize_manifest_payload(manifest: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    changed = False
+    clone = json.loads(json.dumps(manifest))
+    evidence = clone.get("evidence")
+    if not isinstance(evidence, dict):
+        return clone, changed
+
+    commit_sha = str(evidence.get("commit_sha") or "").strip()
+    if commit_sha and not _SHA_RE.fullmatch(commit_sha):
+        evidence["commit_sha"] = ""
+        changed = True
+
+    if not isinstance(evidence.get("files_changed"), list):
+        evidence["files_changed"] = []
+        changed = True
+
+    pushed = evidence.get("pushed")
+    if pushed is not None and not isinstance(pushed, bool):
+        normalized = str(pushed).strip().lower()
+        evidence["pushed"] = normalized in {"true", "1", "yes", "sim"}
+        changed = True
+
+    clone["evidence"] = evidence
+    return clone, changed
 
 
 def _failed_required_stages(manifest: dict[str, Any]) -> list[str]:

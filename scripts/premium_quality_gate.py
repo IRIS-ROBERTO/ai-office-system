@@ -2,7 +2,7 @@
 Premium local quality gate for IRIS.
 
 Runs deterministic checks that catch the highest-risk local regressions:
-Python syntax/import readiness, frontend production build, and optional live
+Python syntax/import readiness, backend bootstrap, frontend production build, and optional live
 API readiness against the running backend.
 """
 from __future__ import annotations
@@ -16,8 +16,14 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+os_environ = __import__("os").environ
+os_environ.setdefault("PYTHONUTF8", "1")
+os_environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
@@ -28,6 +34,7 @@ def main() -> int:
 
     checks = [
         ("python_compile", compile_python),
+        ("backend_bootstrap", validate_backend_bootstrap),
         ("frontend_build", build_frontend),
     ]
     if not args.skip_api:
@@ -74,6 +81,27 @@ def build_frontend() -> None:
     )
     if result.returncode != 0:
         raise RuntimeError("frontend build failed")
+
+
+def validate_backend_bootstrap() -> None:
+    from fastapi.testclient import TestClient
+    from backend.api.main import app
+
+    with TestClient(app) as client:
+        health = client.get("/health", timeout=20)
+        if health.status_code != 200:
+            raise RuntimeError(f"/health returned HTTP {health.status_code}")
+        payload = health.json()
+        if payload.get("api") != "online":
+            raise RuntimeError(f"/health api={payload.get('api')}")
+
+        delivery = client.get("/delivery/metrics", timeout=20)
+        if delivery.status_code != 200:
+            raise RuntimeError(f"/delivery/metrics returned HTTP {delivery.status_code}")
+
+        research = client.get("/research/stats", timeout=20)
+        if research.status_code != 200:
+            raise RuntimeError(f"/research/stats returned HTTP {research.status_code}")
 
 
 def validate_live_api(api_base: str) -> None:
