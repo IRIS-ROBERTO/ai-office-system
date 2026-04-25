@@ -1,5 +1,3 @@
-version: "3.9"
-
 # AI Office System — Docker Compose
 # Roda: Redis + Backend API + Frontend
 # Supabase é cloud — não precisa de container local

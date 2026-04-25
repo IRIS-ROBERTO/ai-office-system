@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str = ""
 
     REDIS_URL: str = "redis://localhost:6379"
-    EVENTBUS_ALLOW_FAKE_REDIS: bool = True
+    EVENTBUS_ALLOW_FAKE_REDIS: bool = False
+    EVENTBUS_REDIS_CONNECT_RETRIES: int = 12
+    EVENTBUS_REDIS_CONNECT_RETRY_DELAY_SECONDS: float = 1.0
 
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000

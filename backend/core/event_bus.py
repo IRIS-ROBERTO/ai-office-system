@@ -46,20 +46,41 @@ class EventBus:
         return self._redis is not None
 
     async def connect(self):
+        last_exc: Exception | None = None
+        retries = max(1, int(settings.EVENTBUS_REDIS_CONNECT_RETRIES))
+        delay = max(0.1, float(settings.EVENTBUS_REDIS_CONNECT_RETRY_DELAY_SECONDS))
+
+        for attempt in range(1, retries + 1):
+            try:
+                client = await aioredis.from_url(
+                    self.redis_url,
+                    encoding="utf-8",
+                    decode_responses=True,
+                    socket_connect_timeout=2,
+                )
+                await client.ping()
+                self._redis = client
+                self._using_fake = False
+                self._mode = "redis"
+                logger.info("EventBus connected to real Redis (%s)", self.redis_url)
+                await self._ensure_consumer_group()
+                logger.info("EventBus ready. mode=%s persistent=%s", self._mode, self.is_persistent)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt < retries:
+                    logger.warning(
+                        "Real Redis unavailable (%s). retry=%s/%s",
+                        exc,
+                        attempt,
+                        retries,
+                    )
+                    await asyncio.sleep(delay)
+
         try:
-            client = await aioredis.from_url(
-                self.redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-                socket_connect_timeout=2,
-            )
-            await client.ping()
-            self._redis = client
-            self._using_fake = False
-            self._mode = "redis"
-            logger.info("EventBus connected to real Redis (%s)", self.redis_url)
+            raise last_exc or RuntimeError("Redis connection failed")
         except Exception as exc:
-            logger.warning("Real Redis unavailable (%s).", exc)
+            logger.warning("Real Redis unavailable after retries (%s).", exc)
             if not settings.EVENTBUS_ALLOW_FAKE_REDIS:
                 self._redis = None
                 self._using_fake = False
