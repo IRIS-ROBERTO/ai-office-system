@@ -133,6 +133,60 @@ type InsightsResponse = {
   generated_at: string;
 };
 
+type ProductFactoryMetrics = {
+  total_products: number;
+  by_repo_strategy: Record<string, number>;
+  by_project_kind: Record<string, number>;
+  provisioning_gate_pass_rate: number;
+  github_push_rate: number;
+  value_gate_pass_rate: number;
+  average_value_score: number;
+};
+
+type ProductValueGate = {
+  approved: boolean;
+  score: number;
+  failed_checks: string[];
+  threshold: number;
+};
+
+type ProductRegistryItem = {
+  category_id: string;
+  application_name: string;
+  application_slug: string;
+  repo_strategy: string;
+  project_kind: string;
+  commit_sha: string;
+  pushed_to_github: boolean;
+  github_repo_url: string | null;
+  product_value_gate?: ProductValueGate;
+  provisioning_gate?: { approved: boolean; failed_checks: string[] };
+  created_at: string;
+};
+
+type ProductRegistryResponse = {
+  total: number;
+  returned: number;
+  items: ProductRegistryItem[];
+};
+
+type GitHubProvisioningStatus = {
+  configured: boolean;
+  authenticated: boolean;
+  login: string;
+  owner: string;
+  standalone_repo_creation_ready: boolean;
+  principal_repo_push_ready: boolean;
+  blockers: { code: string; message: string }[];
+  warnings: { code: string; message: string }[];
+  gh_cli?: {
+    available: boolean;
+    authenticated: boolean;
+    account: string;
+    scopes: string[];
+  };
+};
+
 type Props = { apiUrl: string };
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -195,6 +249,10 @@ function scoreBar(value: number, max: number = 100): React.ReactNode {
       <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 999, transition: 'width 0.4s ease' }} />
     </div>
   );
+}
+
+function formatPercent(value: number | undefined): string {
+  return `${Number(value ?? 0).toFixed(1)}%`;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -916,6 +974,9 @@ const InsightsModal: React.FC<{
   const [creatingApp, setCreatingApp] = useState<string | null>(null);
   const [applicationResult, setApplicationResult] = useState<Record<string, string>>({});
   const [executions, setExecutions] = useState<Record<string, CategoryExecution>>({});
+  const [factoryMetrics, setFactoryMetrics] = useState<ProductFactoryMetrics | null>(null);
+  const [factoryRegistry, setFactoryRegistry] = useState<ProductRegistryItem[]>([]);
+  const [githubStatus, setGithubStatus] = useState<GitHubProvisioningStatus | null>(null);
   const [implementations, setImplementations] = useState<Record<string, InsightImplementation>>(
     Object.fromEntries(data.insights.map((item) => [item.category_id, item.implementation]).filter(([, value]) => Boolean(value))) as Record<string, InsightImplementation>,
   );
@@ -924,6 +985,34 @@ const InsightsModal: React.FC<{
   const cat = data.insights.find((c) => c.category_id === selected) ?? data.insights[0];
   const currentImplementation = cat ? (implementations[cat.category_id] ?? cat.implementation) : undefined;
   const isImplemented = !!currentImplementation?.implemented;
+  const currentProduct = cat
+    ? factoryRegistry.find((item) => item.category_id === cat.category_id)
+    : undefined;
+  const githubReady = Boolean(githubStatus?.standalone_repo_creation_ready);
+
+  const refreshFactoryStatus = useCallback(async () => {
+    const [metricsResp, registryResp, githubResp] = await Promise.all([
+      fetch(`${apiUrl}/product-factory/metrics`).catch(() => null),
+      fetch(`${apiUrl}/product-factory/registry?limit=50`).catch(() => null),
+      fetch(`${apiUrl}/integrations/github`).catch(() => null),
+    ]);
+    if (metricsResp?.ok) {
+      setFactoryMetrics(await metricsResp.json() as ProductFactoryMetrics);
+    }
+    if (registryResp?.ok) {
+      const registry = await registryResp.json() as ProductRegistryResponse;
+      setFactoryRegistry(registry.items ?? []);
+    }
+    if (githubResp?.ok) {
+      setGithubStatus(await githubResp.json() as GitHubProvisioningStatus);
+    }
+  }, [apiUrl]);
+
+  useEffect(() => {
+    refreshFactoryStatus();
+    const id = window.setInterval(refreshFactoryStatus, 15000);
+    return () => window.clearInterval(id);
+  }, [refreshFactoryStatus]);
 
   const confirmImplemented = useCallback(async (
     cat: InsightCategory,
@@ -1064,6 +1153,7 @@ const InsightsModal: React.FC<{
       if (json.implementation) {
         setImplementations(prev => ({ ...prev, [cat.category_id]: json.implementation as InsightImplementation }));
       }
+      refreshFactoryStatus();
     } catch (e) {
       setPromotionResult(prev => ({
         ...prev,
@@ -1090,6 +1180,7 @@ const InsightsModal: React.FC<{
       if (json.implementation) {
         setImplementations(prev => ({ ...prev, [cat.category_id]: json.implementation as InsightImplementation }));
       }
+      refreshFactoryStatus();
     } catch (e) {
       setApplicationResult(prev => ({
         ...prev,
@@ -1436,6 +1527,123 @@ const InsightsModal: React.FC<{
 
           {/* Scrollable content area */}
           <div style={{ padding: '28px 36px', display: 'flex', flexDirection: 'column', gap: 28 }}>
+
+            {/* ── Product Factory Premium Status ──────────────────────────── */}
+            <section>
+              <div style={{ fontSize: 9, color: '#334155', letterSpacing: 2.5, textTransform: 'uppercase', fontWeight: 700, marginBottom: 14 }}>
+                ◈ Product Factory · Gates Premium
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
+                <div style={{ borderRadius: 8, border: `1px solid ${cat.color}24`, background: `${cat.color}0b`, padding: 14 }}>
+                  <div style={{ fontSize: 9, color: '#64748b', letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 800 }}>Produtos</div>
+                  <div style={{ marginTop: 6, fontSize: 24, fontWeight: 900, color: '#f8fafc' }}>{factoryMetrics?.total_products ?? 0}</div>
+                  <div style={{ marginTop: 4, fontSize: 10, color: '#64748b' }}>
+                    Valor médio {Number(factoryMetrics?.average_value_score ?? 0).toFixed(1)}
+                  </div>
+                </div>
+
+                <div style={{ borderRadius: 8, border: '1px solid rgba(34,197,94,0.24)', background: 'rgba(34,197,94,0.08)', padding: 14 }}>
+                  <div style={{ fontSize: 9, color: '#64748b', letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 800 }}>Gate de Valor</div>
+                  <div style={{ marginTop: 6, fontSize: 24, fontWeight: 900, color: '#22c55e' }}>
+                    {formatPercent(factoryMetrics?.value_gate_pass_rate)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 10, color: '#64748b' }}>aprovados no padrão premium</div>
+                </div>
+
+                <div style={{ borderRadius: 8, border: '1px solid rgba(56,189,248,0.24)', background: 'rgba(56,189,248,0.08)', padding: 14 }}>
+                  <div style={{ fontSize: 9, color: '#64748b', letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 800 }}>Push GitHub</div>
+                  <div style={{ marginTop: 6, fontSize: 24, fontWeight: 900, color: '#38bdf8' }}>
+                    {formatPercent(factoryMetrics?.github_push_rate)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 10, color: githubReady ? '#22c55e' : '#facc15' }}>
+                    {githubReady ? 'repo dedicado pronto' : 'provisionamento pendente'}
+                  </div>
+                </div>
+
+                <div style={{ borderRadius: 8, border: `1px solid ${githubReady ? 'rgba(34,197,94,0.28)' : 'rgba(250,204,21,0.28)'}`, background: githubReady ? 'rgba(34,197,94,0.08)' : 'rgba(250,204,21,0.08)', padding: 14 }}>
+                  <div style={{ fontSize: 9, color: '#64748b', letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 800 }}>GitHub Runtime</div>
+                  <div style={{ marginTop: 6, fontSize: 13, fontWeight: 900, color: githubReady ? '#22c55e' : '#facc15' }}>
+                    {githubReady ? 'Pronto para standalone' : 'Atenção requerida'}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 10, color: '#64748b', lineHeight: 1.5 }}>
+                    {githubStatus?.gh_cli?.authenticated
+                      ? `gh CLI: ${githubStatus.gh_cli.account || 'autenticado'}`
+                      : githubStatus?.authenticated
+                      ? `API: ${githubStatus.login || 'autenticada'}`
+                      : 'sem autenticação confirmada'}
+                  </div>
+                </div>
+              </div>
+
+              {currentProduct && (
+                <div style={{
+                  marginTop: 12,
+                  borderRadius: 8,
+                  border: `1px solid ${currentProduct.product_value_gate?.approved ? 'rgba(34,197,94,0.28)' : 'rgba(250,204,21,0.28)'}`,
+                  background: currentProduct.product_value_gate?.approved ? 'rgba(34,197,94,0.07)' : 'rgba(250,204,21,0.07)',
+                  padding: '14px 16px',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  gap: 16,
+                  alignItems: 'center',
+                }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, fontWeight: 900, color: '#e2e8f0' }}>{currentProduct.application_name}</span>
+                      <Badge color={currentProduct.repo_strategy === 'dedicated_repository' ? '#38bdf8' : '#a78bfa'}>
+                        {currentProduct.repo_strategy === 'dedicated_repository' ? 'Repo dedicado' : 'Repo IRIS'}
+                      </Badge>
+                      <Badge color={currentProduct.product_value_gate?.approved ? '#22c55e' : '#facc15'}>
+                        Value Gate {currentProduct.product_value_gate?.score ?? 0}/{currentProduct.product_value_gate?.threshold ?? 85}
+                      </Badge>
+                      <Badge color={currentProduct.pushed_to_github ? '#22c55e' : '#facc15'}>
+                        {currentProduct.pushed_to_github ? 'Push confirmado' : 'Push pendente'}
+                      </Badge>
+                    </div>
+                    <div style={{ marginTop: 7, fontSize: 10, color: '#64748b', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                      {currentProduct.application_slug} · commit {currentProduct.commit_sha || '—'} · {formatDate(currentProduct.created_at)}
+                    </div>
+                    {currentProduct.product_value_gate?.failed_checks?.length ? (
+                      <div style={{ marginTop: 7, fontSize: 10, color: '#facc15' }}>
+                        Pendências: {currentProduct.product_value_gate.failed_checks.join(', ')}
+                      </div>
+                    ) : null}
+                  </div>
+                  {currentProduct.github_repo_url ? (
+                    <a
+                      href={currentProduct.github_repo_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        textDecoration: 'none',
+                        color: '#f0f6ff',
+                        border: '1px solid rgba(240,246,255,0.18)',
+                        background: 'rgba(240,246,255,0.08)',
+                        borderRadius: 8,
+                        padding: '8px 12px',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Abrir GitHub ↗
+                    </a>
+                  ) : (
+                    <div style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>sem URL remota</div>
+                  )}
+                </div>
+              )}
+
+              {githubStatus?.blockers?.length ? (
+                <div style={{ marginTop: 10, fontSize: 11, color: '#f87171', lineHeight: 1.6 }}>
+                  GitHub bloqueado: {githubStatus.blockers.map((item) => item.message).join(' · ')}
+                </div>
+              ) : githubStatus?.warnings?.length ? (
+                <div style={{ marginTop: 10, fontSize: 11, color: '#facc15', lineHeight: 1.6 }}>
+                  GitHub: {githubStatus.warnings[0].message}
+                </div>
+              ) : null}
+            </section>
 
             {/* ── Log de Execução em Tempo Real ───────────────────────────── */}
             {exec && (
