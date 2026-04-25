@@ -94,6 +94,13 @@ break > "%BACKEND_LOG%"
 break > "%FRONTEND_LOG%"
 echo  [OK] Logs serao gravados em %LOG_DIR%
 
+if not exist "%RUNTIME_DIR%" (
+    mkdir "%RUNTIME_DIR%" >nul 2>&1
+    echo  [OK] Diretorio .runtime criado para research store e redis data
+) else (
+    echo  [OK] Diretorio .runtime detectado
+)
+
 echo  [CHECK] Validando dependencias Python do backend...
 "%VENV%\python.exe" -c "import fastapi, uvicorn" >nul 2>&1
 if errorlevel 1 (
@@ -251,7 +258,7 @@ echo          Para tempo real completo, use Docker Desktop, WSL ou redis-server 
 
 echo.
 echo  [BACKEND] Iniciando FastAPI em %API_URL%...
-start "IRIS-Backend" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVICE_RUNNER%" -Title "IRIS-Backend" -WorkingDirectory "%ROOT%" -Executable "%VENV%\python.exe" -LogPath "%BACKEND_LOG%" -EnvLine "REDIS_URL=redis://127.0.0.1:%REDIS_PORT%|PICOCLAW_HOST=http://127.0.0.1:18790|PICOCLAW_ENABLED=true|PICOCLAW_REQUIRED=true|PYTHONUTF8=1|PYTHONIOENCODING=utf-8|MAX_RETRIES_PER_SUBTASK=2|SUBTASK_EXECUTION_TIMEOUT_SECONDS=240" -ArgumentLine "-m|uvicorn|%BACKEND_MODULE%|--host|127.0.0.1|--port|%BACKEND_PORT%|--log-level|info"
+start "IRIS-Backend" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVICE_RUNNER%" -Title "IRIS-Backend" -WorkingDirectory "%ROOT%" -Executable "%VENV%\python.exe" -LogPath "%BACKEND_LOG%" -EnvLine "REDIS_URL=redis://127.0.0.1:%REDIS_PORT%|PICOCLAW_HOST=http://127.0.0.1:18790|PICOCLAW_ENABLED=true|PICOCLAW_REQUIRED=false|PYTHONUTF8=1|PYTHONIOENCODING=utf-8|MAX_RETRIES_PER_SUBTASK=2|SUBTASK_EXECUTION_TIMEOUT_SECONDS=240" -ArgumentLine "-m|uvicorn|%BACKEND_MODULE%|--host|127.0.0.1|--port|%BACKEND_PORT%|--log-level|info|--reload"
 call :WaitForHttp "%API_URL%/docs" 45
 if errorlevel 1 (
     echo  [ERRO] Backend nao respondeu em %API_URL%/docs
@@ -290,12 +297,15 @@ echo.
 echo  ========================================================
 echo   IRIS esta rodando
 echo.
-echo   Interface:  %FRONTEND_URL%
-echo   API Docs:   %API_URL%/docs
-echo   Health:     %API_URL%/health
-echo   WebSocket:  %WS_URL%
+echo   Interface:     %FRONTEND_URL%
+echo   Intel Scout:   %FRONTEND_URL% ^(aba "Intel Scout"^)
 echo.
-echo   Logs:
+echo   API Docs:      %API_URL%/docs
+echo   Health:        %API_URL%/health
+echo   Research API:  %API_URL%/research/findings
+echo   WebSocket:     %WS_URL%
+echo.
+echo   Logs em tempo real:
 echo     Backend  - janela "IRIS-Backend"
 echo     Frontend - janela "IRIS-Frontend"
 echo     Arquivos  - %LOG_DIR%

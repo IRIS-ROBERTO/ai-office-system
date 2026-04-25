@@ -49,10 +49,17 @@ class EventType(str, Enum):
     FILE_CHANGED = "file_changed"
     DIFF_PREVIEW = "diff_preview"
 
+    # Research / Intel
+    RESEARCH_STARTED = "research_started"
+    RESEARCH_FINDING = "research_finding"
+    RESEARCH_COMPLETED = "research_completed"
+    RESEARCH_SCHEDULED = "research_scheduled"
+
 
 class TeamType(str, Enum):
     DEV = "dev"
     MARKETING = "marketing"
+    INTEL = "intel"
 
 
 class AgentRole(str, Enum):
@@ -71,6 +78,9 @@ class AgentRole(str, Enum):
     SEO = "seo"
     SOCIAL = "social"
     ANALYTICS = "analytics"
+
+    # Intel Team
+    SCOUT = "scout"
 
     # Senior (ambos os times)
     ORCHESTRATOR = "orchestrator"
@@ -91,6 +101,7 @@ AGENT_COLORS = {
     AgentRole.SEO: "#FF6D00",
     AgentRole.SOCIAL: "#FF6D00",
     AgentRole.ORCHESTRATOR: "#FFFFFF", # Branco — sênior
+    AgentRole.SCOUT: "#38bdf8",         # Azul ciano — Intel
 }
 
 

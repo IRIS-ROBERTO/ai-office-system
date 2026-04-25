@@ -37,6 +37,7 @@ _CANONICAL_AGENTS: tuple[dict[str, str], ...] = (
     {"agent_id": "mkt_seo_01", "agent_role": AgentRole.SEO.value, "team": "marketing"},
     {"agent_id": "mkt_social_01", "agent_role": AgentRole.SOCIAL.value, "team": "marketing"},
     {"agent_id": "mkt_analytics_01", "agent_role": AgentRole.ANALYTICS.value, "team": "marketing"},
+    {"agent_id": "intel_scout_01", "agent_role": AgentRole.SCOUT.value, "team": "intel"},
 )
 
 
@@ -48,6 +49,8 @@ def _default_position(team: str, index: int) -> dict[str, int]:
         return {"x": 690, "y": 220 + index * 48}
     if team == "marketing":
         return {"x": 900 + (index % 3) * 120, "y": 180 + (index // 3) * 120}
+    if team == "intel":
+        return {"x": 690, "y": 520}
     return {"x": 180 + (index % 3) * 120, "y": 180 + (index // 3) * 120}
 
 

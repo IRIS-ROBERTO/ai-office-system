@@ -7,10 +7,11 @@ import { useEventStream } from './websocket/useEventStream';
 
 const ActivityFeed = lazy(() => import('./components/ui/ActivityFeed'));
 const RequestDesk = lazy(() => import('./components/ui/RequestDesk'));
+const ResearchHub = lazy(() => import('./components/research/ResearchHub'));
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8124';
 
-type ActiveTab = 'command' | 'intake' | 'agents';
+type ActiveTab = 'command' | 'intake' | 'agents' | 'research';
 
 const panelFallback = <div className="empty-state">Carregando módulo operacional...</div>;
 
@@ -95,8 +96,10 @@ export default function App() {
             { id: 'command' as const, label: 'Command Center' },
             { id: 'intake' as const, label: 'Intake' },
             { id: 'agents' as const, label: 'Agent Ops' },
+            { id: 'research' as const, label: '◈ Intel Scout' },
           ].map((tab) => (
             <button
+              type="button"
               className={activeTab === tab.id ? 'product-nav__item product-nav__item--active' : 'product-nav__item'}
               key={tab.id}
               onClick={() => selectTab(tab.id)}
@@ -150,6 +153,14 @@ export default function App() {
           onSelectAgent={setSelectedAgentId}
           onSelectTask={setSelectedRequestId}
         />
+      )}
+
+      {activeTab === 'research' && (
+        <section className="module-frame">
+          <Suspense fallback={panelFallback}>
+            <ResearchHub apiUrl={API_URL} />
+          </Suspense>
+        </section>
       )}
     </div>
   );

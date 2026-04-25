@@ -43,6 +43,15 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        # Portas padrão do IRIS.bat (5124-5129 frontend, 8124-8129 backend)
+        "http://localhost:5124",
+        "http://127.0.0.1:5124",
+        "http://localhost:5125",
+        "http://127.0.0.1:5125",
+        "http://localhost:5126",
+        "http://127.0.0.1:5126",
+        "http://localhost:8124",
+        "http://127.0.0.1:8124",
     ]
 
     OPENROUTER_MANAGEMENT_KEY: str = ""

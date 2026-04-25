@@ -106,6 +106,13 @@ ROLE_CAPABILITIES: dict[str, dict[str, Any]] = {
         "segmentation": "metrics, bottlenecks, dashboards and impact analysis",
         "upgrade_track": ["anomaly detection", "delivery intelligence"],
     },
+    "scout": {
+        "autonomy": "autonomous_scheduler",
+        "declared_tools": ["github_search", "huggingface_search", "web_search", "research_store"],
+        "memory_posture": "shared_memory_allowed",
+        "segmentation": "GitHub trending, HuggingFace models/datasets, project scoring and combination analysis",
+        "upgrade_track": ["arxiv integration", "patent search", "competitor tracking", "market signal alerts"],
+    },
 }
 
 
