@@ -110,6 +110,62 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def update_product_factory_delivery_status(
+    *,
+    application_slug: str,
+    pushed_to_github: bool,
+    github_repo_url: str | None = None,
+) -> dict[str, Any] | None:
+    """Persist the final remote delivery evidence after the API push step."""
+    if not application_slug:
+        return None
+
+    rows = _read_factory_registry()
+    updated: dict[str, Any] | None = None
+    for index in range(len(rows) - 1, -1, -1):
+        row = rows[index]
+        if row.get("application_slug") != application_slug:
+            continue
+
+        row["pushed_to_github"] = bool(pushed_to_github)
+        if github_repo_url:
+            row["github_repo_url"] = github_repo_url
+
+        gate = dict(row.get("provisioning_gate") or {})
+        checks = dict(gate.get("checks") or {})
+        checks["remote_delivery_confirmed"] = bool(pushed_to_github)
+        if github_repo_url:
+            checks["github_repo_url_present"] = True
+        gate["checks"] = checks
+        gate["failed_checks"] = [name for name, ok in checks.items() if not ok]
+        gate["approved"] = not gate["failed_checks"]
+        row["provisioning_gate"] = gate
+
+        value_gate = dict(row.get("product_value_gate") or {})
+        value_checks = dict(value_gate.get("checks") or {})
+        if value_checks:
+            value_checks["repository_ready"] = bool(gate["approved"])
+            value_gate["checks"] = value_checks
+            value_gate["failed_checks"] = [name for name, ok in value_checks.items() if not ok]
+            score = _score_product_value_checks(value_checks)
+            value_gate["score"] = score
+            value_gate["approved"] = score >= int(value_gate.get("threshold") or 85) and not any(
+                name in value_gate["failed_checks"]
+                for name in ("validation_passed", "required_artifacts_present", "repository_ready")
+            )
+            row["product_value_gate"] = value_gate
+
+        updated = row
+        rows[index] = row
+        break
+
+    if updated is None:
+        return None
+
+    _write_factory_registry(rows)
+    return updated
+
+
 def _prepare_repo_root(app_dir: Path, *, standalone: bool) -> Path:
     if not standalone:
         return _ROOT
@@ -411,6 +467,18 @@ def _build_product_value_gate(
         "dedicated_repo_for_standalone": repo_strategy != "dedicated_repository"
         or bool((provisioning_gate or {}).get("checks", {}).get("origin_configured")),
     }
+    score = _score_product_value_checks(checks)
+    failed = [name for name, ok in checks.items() if not ok]
+    return {
+        "approved": score >= 85 and not any(name in failed for name in ("validation_passed", "required_artifacts_present")),
+        "score": score,
+        "failed_checks": failed,
+        "checks": checks,
+        "threshold": 85,
+    }
+
+
+def _score_product_value_checks(checks: dict[str, bool]) -> int:
     weights = {
         "market_score_present": 15,
         "market_pitch_present": 10,
@@ -423,15 +491,7 @@ def _build_product_value_gate(
         "repository_ready": 7,
         "dedicated_repo_for_standalone": 5,
     }
-    score = sum(weight for name, weight in weights.items() if checks.get(name))
-    failed = [name for name, ok in checks.items() if not ok]
-    return {
-        "approved": score >= 85 and not any(name in failed for name in ("validation_passed", "required_artifacts_present")),
-        "score": score,
-        "failed_checks": failed,
-        "checks": checks,
-        "threshold": 85,
-    }
+    return sum(weight for name, weight in weights.items() if checks.get(name))
 
 
 def _all_required_artifacts_present(required_files: set[str], changed_files: set[str]) -> bool:
@@ -460,11 +520,13 @@ def _build_repo_provisioning_gate(
         "head_commit_present": _git_stdout(repo_root, ["rev-parse", "--short", "HEAD"]) == commit_sha,
         "push_confirmed": True,
         "github_repo_url_present": True,
+        "remote_delivery_confirmed": True,
     }
     if repo_strategy == "dedicated_repository":
         checks["origin_configured"] = _git_ok(repo_root, ["remote", "get-url", "origin"])
         checks["push_confirmed"] = bool(pushed)
         checks["github_repo_url_present"] = bool(remote_url)
+        checks["remote_delivery_confirmed"] = bool(pushed)
     failed = [name for name, ok in checks.items() if not ok]
     return {
         "approved": not failed,
@@ -477,6 +539,12 @@ def _append_factory_registry(payload: dict[str, Any]) -> None:
     _FACTORY_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     with _FACTORY_REGISTRY.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
+def _write_factory_registry(rows: list[dict[str, Any]]) -> None:
+    _FACTORY_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    payload = "".join(json.dumps(row, ensure_ascii=True) + "\n" for row in rows)
+    _FACTORY_REGISTRY.write_text(payload, encoding="utf-8")
 
 
 def _read_factory_registry() -> list[dict[str, Any]]:

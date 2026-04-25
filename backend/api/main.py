@@ -53,6 +53,7 @@ from backend.core.application_factory import (
     create_application_from_insight,
     get_product_factory_metrics,
     list_product_factory_registry,
+    update_product_factory_delivery_status,
 )
 from backend.config.settings import settings
 from backend.tools.brain_router import get_brain_status
@@ -1408,7 +1409,21 @@ async def create_research_application(category_id: str):
         raise HTTPException(status_code=500, detail=f"Falha ao criar aplicação: {exc}")
 
     if result.get("repo_strategy") == "iris_repository":
-        result["pushed_to_github"] = await _push_iris_repo_to_github()
+        pushed = await _push_iris_repo_to_github()
+        result["pushed_to_github"] = pushed
+        updated = update_product_factory_delivery_status(
+            application_slug=str(result.get("application_slug") or ""),
+            pushed_to_github=pushed,
+            github_repo_url=(
+                f"https://github.com/{settings.GITHUB_DEFAULT_ORG or settings.GITHUB_USERNAME}/ai-office-system"
+                if pushed
+                else None
+            ),
+        )
+        if updated:
+            result["provisioning_gate"] = updated.get("provisioning_gate")
+            result["product_value_gate"] = updated.get("product_value_gate")
+            result["github_repo_url"] = updated.get("github_repo_url")
     result["implementation"] = research_store.mark_insight_implemented(
         category_id,
         method="application_factory",
