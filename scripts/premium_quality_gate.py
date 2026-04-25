@@ -34,6 +34,7 @@ def main() -> int:
 
     checks = [
         ("python_compile", compile_python),
+        ("delivery_regressions", run_delivery_regressions),
         ("backend_bootstrap", validate_backend_bootstrap),
         ("frontend_build", build_frontend),
     ]
@@ -66,6 +67,20 @@ def compile_python() -> None:
         raise RuntimeError("no Python files found")
     for path in files:
         py_compile.compile(str(path), doraise=True)
+
+
+def run_delivery_regressions() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/regression_delivery_checks.py"],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("delivery regression checks failed")
 
 
 def build_frontend() -> None:

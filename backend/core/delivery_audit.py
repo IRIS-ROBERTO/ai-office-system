@@ -78,22 +78,32 @@ def get_delivery_track_metrics() -> dict[str, Any]:
         track = _delivery_track_for_repo(item.get("repo_path", ""))
         bucket = tracks[track]
         bucket["total"] += 1
+        delivery_class = _delivery_class_for_item(item)
+        bucket["by_delivery_class"][delivery_class] = bucket["by_delivery_class"].get(delivery_class, 0) + 1
         if item["approved"]:
             bucket["approved"] += 1
         else:
             bucket["failed"] += 1
+            for failed_stage in item.get("failed_stages") or []:
+                bucket["failed_by_stage"][failed_stage] = bucket["failed_by_stage"].get(failed_stage, 0) + 1
         if item["functional_ready"]:
             bucket["functional_ready"] += 1
         if item.get("pushed"):
             bucket["pushed"] += 1
         if str(item.get("github_repo_url") or "").strip() == "not_provisioned":
             bucket["not_provisioned"] += 1
+        if track == "standalone" and item["approved"] and not item.get("pushed"):
+            if str(item.get("github_repo_url") or "").strip() == "not_provisioned":
+                bucket["github_blockers"]["missing_remote"] += 1
+            else:
+                bucket["github_blockers"]["push_failed_or_unconfirmed"] += 1
 
     for bucket in tracks.values():
         total = bucket["total"] or 1
         bucket["approval_rate"] = round(bucket["approved"] / total * 100, 1) if bucket["total"] else 0.0
         bucket["push_rate"] = round(bucket["pushed"] / total * 100, 1) if bucket["total"] else 0.0
         bucket["not_provisioned_rate"] = round(bucket["not_provisioned"] / total * 100, 1) if bucket["total"] else 0.0
+        bucket["premium_delivery_score"] = _premium_delivery_score(bucket)
     return tracks
 
 
@@ -175,6 +185,36 @@ def _delivery_track_for_repo(repo_path: str) -> str:
         return "platform"
 
 
+def _delivery_class_for_item(item: dict[str, Any]) -> str:
+    files = {str(path).replace("\\", "/").lower() for path in item.get("files_changed") or []}
+    stages = {str(stage.get("name") or "") for stage in item.get("stages") or []}
+    commit_message = str(item.get("commit_message") or "").lower()
+    role = str(item.get("agent_role") or "").lower()
+
+    if {"index.html", "src/app.js", "src/styles.css"}.issubset(files):
+        return "static_web_app"
+    if any(path.startswith("docs/") for path in files) and role in {"research", "strategy", "content", "seo", "social", "analytics"}:
+        return "marketing_document"
+    if any(path.startswith("docs/") for path in files) and "document" in commit_message:
+        return "technical_document"
+    if "FUNCTIONAL_READINESS" in stages and any(path.startswith("security/") for path in files):
+        return "complex_project_slice"
+    if any(path.startswith("security/") for path in files):
+        return "security_review"
+    if any(path.startswith("tests/") for path in files):
+        return "qa_validation"
+    return "general_delivery"
+
+
+def _premium_delivery_score(bucket: dict[str, Any]) -> float:
+    if not bucket["total"]:
+        return 0.0
+    approval = bucket["approved"] / bucket["total"]
+    functional = bucket["functional_ready"] / bucket["total"]
+    push = bucket["pushed"] / bucket["total"]
+    return round((approval * 50) + (functional * 30) + (push * 20), 1)
+
+
 def _empty_track_metrics() -> dict[str, Any]:
     return {
         "total": 0,
@@ -183,9 +223,16 @@ def _empty_track_metrics() -> dict[str, Any]:
         "functional_ready": 0,
         "pushed": 0,
         "not_provisioned": 0,
+        "by_delivery_class": {},
+        "failed_by_stage": {},
+        "github_blockers": {
+            "missing_remote": 0,
+            "push_failed_or_unconfirmed": 0,
+        },
         "approval_rate": 0.0,
         "push_rate": 0.0,
         "not_provisioned_rate": 0.0,
+        "premium_delivery_score": 0.0,
     }
 
 
