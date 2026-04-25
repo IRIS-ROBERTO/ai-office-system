@@ -77,6 +77,15 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
     if not provisioning_gate["approved"]:
         raise RuntimeError("repo provisioning gate failed: " + "; ".join(provisioning_gate["failed_checks"]))
 
+    product_value_gate = _build_product_value_gate(
+        insight=insight,
+        app_dir=app_dir,
+        files_changed=[str(path.relative_to(repo_root)).replace("\\", "/") for path in written],
+        validation=validation,
+        provisioning_gate=provisioning_gate,
+        repo_strategy=delivery_mode["repo_strategy"],
+    )
+
     result = {
         "status": "created",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -95,6 +104,7 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
         "pushed_to_github": standalone,
         "github_repo_url": remote_url.removesuffix(".git") if remote_url else None,
         "provisioning_gate": provisioning_gate,
+        "product_value_gate": product_value_gate,
     }
     _append_factory_registry(result)
     return result
@@ -320,11 +330,15 @@ def get_product_factory_metrics() -> dict[str, Any]:
             "by_project_kind": {},
             "provisioning_gate_pass_rate": 0.0,
             "github_push_rate": 0.0,
+            "value_gate_pass_rate": 0.0,
+            "average_value_score": 0.0,
         }
 
     by_repo_strategy: dict[str, int] = {}
     by_project_kind: dict[str, int] = {}
     gate_passed = 0
+    value_gate_passed = 0
+    value_score_total = 0
     pushed = 0
 
     for row in rows:
@@ -335,6 +349,10 @@ def get_product_factory_metrics() -> dict[str, Any]:
         gate = row.get("provisioning_gate") or {}
         if gate.get("approved"):
             gate_passed += 1
+        value_gate = row.get("product_value_gate") or {}
+        if value_gate.get("approved"):
+            value_gate_passed += 1
+        value_score_total += int(value_gate.get("score") or 0)
         if row.get("pushed_to_github"):
             pushed += 1
 
@@ -345,7 +363,85 @@ def get_product_factory_metrics() -> dict[str, Any]:
         "by_project_kind": by_project_kind,
         "provisioning_gate_pass_rate": round(gate_passed / total * 100, 1),
         "github_push_rate": round(pushed / total * 100, 1),
+        "value_gate_pass_rate": round(value_gate_passed / total * 100, 1),
+        "average_value_score": round(value_score_total / total, 1),
     }
+
+
+def _build_product_value_gate(
+    *,
+    insight: dict[str, Any],
+    app_dir: Path,
+    files_changed: list[str],
+    validation: list[dict[str, str]],
+    provisioning_gate: dict[str, Any],
+    repo_strategy: str,
+) -> dict[str, Any]:
+    potential = insight.get("product_potential") or {}
+    top_projects = insight.get("top_projects") or []
+    summary = insight.get("summary") or {}
+    required_files = {
+        "README.md",
+        "ROADMAP.md",
+        "LICENSE",
+        "index.html",
+        "src/app.js",
+        "src/styles.css",
+        "src/data.js",
+        "docs/ARCHITECTURE.md",
+        "docs/RUNBOOK.md",
+        "docs/MARKET_BRIEF.md",
+        "security/SECURITY_REVIEW.md",
+        "tests/smoke-check.js",
+    }
+    changed = set(files_changed)
+    checks = {
+        "market_score_present": int(potential.get("score") or 0) >= 70,
+        "market_pitch_present": bool(str(potential.get("pitch") or "").strip()),
+        "top_projects_present": len(top_projects) >= 3,
+        "implementation_summary_present": all(
+            str(summary.get(key) or "").strip()
+            for key in ("o_que_e", "para_que_serve", "onde_usariamos", "o_que_implementariamos")
+        ),
+        "required_artifacts_present": _all_required_artifacts_present(required_files, changed),
+        "validation_passed": bool(validation) and all(item.get("result") == "passed" for item in validation),
+        "security_review_present": (app_dir / "security" / "SECURITY_REVIEW.md").exists(),
+        "runbook_present": (app_dir / "docs" / "RUNBOOK.md").exists(),
+        "repository_ready": bool((provisioning_gate or {}).get("approved")),
+        "dedicated_repo_for_standalone": repo_strategy != "dedicated_repository"
+        or bool((provisioning_gate or {}).get("checks", {}).get("origin_configured")),
+    }
+    weights = {
+        "market_score_present": 15,
+        "market_pitch_present": 10,
+        "top_projects_present": 10,
+        "implementation_summary_present": 10,
+        "required_artifacts_present": 15,
+        "validation_passed": 15,
+        "security_review_present": 7,
+        "runbook_present": 6,
+        "repository_ready": 7,
+        "dedicated_repo_for_standalone": 5,
+    }
+    score = sum(weight for name, weight in weights.items() if checks.get(name))
+    failed = [name for name, ok in checks.items() if not ok]
+    return {
+        "approved": score >= 85 and not any(name in failed for name in ("validation_passed", "required_artifacts_present")),
+        "score": score,
+        "failed_checks": failed,
+        "checks": checks,
+        "threshold": 85,
+    }
+
+
+def _all_required_artifacts_present(required_files: set[str], changed_files: set[str]) -> bool:
+    normalized = {path.replace("\\", "/").lstrip("./") for path in changed_files}
+    for required in required_files:
+        if required in normalized:
+            continue
+        if not any(path.endswith(f"/{required}") for path in normalized):
+            return False
+    return True
 
 
 def _build_repo_provisioning_gate(
