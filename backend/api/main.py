@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.core.event_bus import event_bus
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 from backend.core.delivery_audit import get_delivery_track_metrics, get_task_delivery_audit, list_delivery_audits
+from backend.core.delivery_ledger import get_delivery_ledger
 from backend.core.delivery_retrospective import list_retrospectives
 from backend.core.execution_trace import (
     append_execution_log,
@@ -867,6 +868,12 @@ async def get_delivery_audit_endpoint(task_id: str):
 async def get_delivery_metrics_endpoint():
     """Métricas operacionais separadas por trilha: plataforma vs produtos standalone."""
     return {"tracks": get_delivery_track_metrics()}
+
+
+@app.get("/delivery/ledger")
+async def get_delivery_ledger_endpoint(limit: int = 100):
+    """Ledger premium de performance por agente, time e entrega auditada."""
+    return get_delivery_ledger(limit=limit)
 
 
 @app.get("/delivery/retrospectives")

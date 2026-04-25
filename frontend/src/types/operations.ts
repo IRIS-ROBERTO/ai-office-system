@@ -71,6 +71,47 @@ export interface AgentPersonalityConfig {
   updated_at?: string | null;
 }
 
+export interface DeliveryLedgerAgent {
+  agent_key: string;
+  agent_id: string;
+  agent_role: string;
+  team: string;
+  total_deliveries: number;
+  approved_deliveries: number;
+  failed_deliveries: number;
+  functional_ready: number;
+  pushed_to_github: number;
+  commit_ready: number;
+  approval_rate: number;
+  functional_rate: number;
+  github_push_rate: number;
+  commit_traceability_rate: number;
+  premium_score: number;
+  maturity_level: string;
+  next_actions: string[];
+}
+
+export interface DeliveryLedgerTeam {
+  team: string;
+  agents: number;
+  total_deliveries: number;
+  approval_rate: number;
+  functional_rate: number;
+  github_push_rate: number;
+  commit_traceability_rate: number;
+  premium_score: number;
+}
+
+export interface DeliveryLedger {
+  total_deliveries: number;
+  approved_deliveries: number;
+  functional_ready: number;
+  pushed_to_github: number;
+  agents: DeliveryLedgerAgent[];
+  teams: DeliveryLedgerTeam[];
+  recommendations: string[];
+}
+
 export type PipelineState = 'pending' | 'active' | 'completed' | 'failed';
 export type SlaState = 'healthy' | 'warning' | 'breached';
 

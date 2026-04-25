@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAgentProfile } from '../../data/agentProfiles';
 import type { Agent } from '../../state/officeStore';
-import type { AgentPersonalityConfig, ExecutionLogItem, OfficeTask } from '../../types/operations';
+import type { AgentPersonalityConfig, DeliveryLedger, DeliveryLedgerAgent, ExecutionLogItem, OfficeTask } from '../../types/operations';
 import { formatMinutes } from '../../utils/operations';
 
 interface AgentOperationsProps {
@@ -132,6 +132,75 @@ function parseLines(value: string): string[] {
     .split('\n')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function formatRate(value: number | undefined): string {
+  return `${Number(value ?? 0).toFixed(1)}%`;
+}
+
+function findLedgerAgent(agent: Agent | null, ledger: DeliveryLedger | null): DeliveryLedgerAgent | null {
+  if (!agent || !ledger) return null;
+  return ledger.agents.find((item) => (
+    item.agent_id === agent.agent_id
+    || item.agent_role.toLowerCase() === agent.agent_role.toLowerCase()
+  )) ?? null;
+}
+
+function DeliveryLedgerPanel({
+  ledger,
+  selectedAgent,
+}: {
+  ledger: DeliveryLedger | null;
+  selectedAgent: Agent | null;
+}) {
+  const agentLedger = findLedgerAgent(selectedAgent, ledger);
+  const topAgent = ledger?.agents?.[0] ?? null;
+
+  return (
+    <section className="delivery-ledger-panel">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Delivery Ledger</p>
+          <h2>Produção premium auditada</h2>
+        </div>
+        <span className="section-badge">{ledger ? `${ledger.total_deliveries} entregas` : 'loading'}</span>
+      </div>
+
+      <div className="delivery-ledger-grid">
+        <div>
+          <span>Score do agente</span>
+          <strong>{agentLedger ? agentLedger.premium_score.toFixed(1) : '0.0'}</strong>
+          <small>{agentLedger?.maturity_level ?? 'sem baseline'}</small>
+        </div>
+        <div>
+          <span>Aprovação</span>
+          <strong>{formatRate(agentLedger?.approval_rate)}</strong>
+          <small>{agentLedger?.approved_deliveries ?? 0}/{agentLedger?.total_deliveries ?? 0} entregas</small>
+        </div>
+        <div>
+          <span>GitHub</span>
+          <strong>{formatRate(agentLedger?.github_push_rate)}</strong>
+          <small>push confirmado</small>
+        </div>
+        <div>
+          <span>Funcional</span>
+          <strong>{formatRate(agentLedger?.functional_rate)}</strong>
+          <small>smoke/readiness</small>
+        </div>
+      </div>
+
+      <div className="delivery-ledger-split">
+        <div>
+          <span className="agent-ops-group__label">Melhor produtor</span>
+          <p>{topAgent ? `${roleLabel(topAgent.agent_role || topAgent.agent_key)} · ${topAgent.premium_score.toFixed(1)}` : 'Sem entregas auditadas'}</p>
+        </div>
+        <div>
+          <span className="agent-ops-group__label">Próxima ação</span>
+          <p>{agentLedger?.next_actions?.[0] ?? ledger?.recommendations?.[0] ?? 'Gerar baseline com entrega determinística.'}</p>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function AgentRoster({
@@ -509,6 +578,29 @@ export function AgentOperations({
   );
   const selectedAgentTask = selectedAgent ? getAgentTask(selectedAgent, tasks, selectedTask) : null;
   const agentLogs = selectedAgent ? extractAgentLogs(selectedAgent, selectedLogs) : [];
+  const [deliveryLedger, setDeliveryLedger] = useState<DeliveryLedger | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLedger() {
+      try {
+        const response = await fetch(`${apiUrl}/delivery/ledger?limit=100`);
+        if (!response.ok) return;
+        const data = (await response.json()) as DeliveryLedger;
+        if (!cancelled) setDeliveryLedger(data);
+      } catch {
+        if (!cancelled) setDeliveryLedger(null);
+      }
+    }
+
+    loadLedger();
+    const intervalId = window.setInterval(loadLedger, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [apiUrl]);
 
   useEffect(() => {
     if (!selectedAgentId && selectedAgent) {
@@ -541,13 +633,16 @@ export function AgentOperations({
           tasks={tasks}
           onSelectAgent={onSelectAgent}
         />
-        <AgentWorkbench
-          agent={selectedAgent}
-          task={selectedAgentTask}
-          logs={agentLogs}
-          logsLoading={logsLoading}
-          onSelectTask={onSelectTask}
-        />
+        <div className="agent-ops-main-stack">
+          <DeliveryLedgerPanel ledger={deliveryLedger} selectedAgent={selectedAgent} />
+          <AgentWorkbench
+            agent={selectedAgent}
+            task={selectedAgentTask}
+            logs={agentLogs}
+            logsLoading={logsLoading}
+            onSelectTask={onSelectTask}
+          />
+        </div>
         <AgentConfigEditor apiUrl={apiUrl} agent={selectedAgent} />
       </div>
     </main>
