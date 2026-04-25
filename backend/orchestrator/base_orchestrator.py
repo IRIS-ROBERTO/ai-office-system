@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any
@@ -44,6 +45,7 @@ from backend.tools.ollama_tool import get_crewai_llm_str, get_senior_llm
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = settings.MAX_RETRIES_PER_SUBTASK
+DEFAULT_SUBTASK_SLA_SECONDS = 180
 
 
 def _is_transient_model_error(exc: Exception) -> bool:
@@ -238,6 +240,24 @@ class BaseOrchestrator(ABC):
             logger.warning(line)
         else:
             logger.info(line)
+
+    def _subtask_sla_seconds(self, subtask: dict[str, Any]) -> int:
+        if can_handle_document_delivery(subtask):
+            return 15
+        if can_handle_static_web_delivery(subtask):
+            return 45
+        if can_handle_complex_project_delivery(subtask):
+            return 180
+        return DEFAULT_SUBTASK_SLA_SECONDS
+
+    def _subtask_runtime_metadata(self, *, subtask: dict[str, Any], started_at: float) -> dict[str, Any]:
+        duration_seconds = round(max(0.0, time.perf_counter() - started_at), 2)
+        sla_seconds = self._subtask_sla_seconds(subtask)
+        return {
+            "duration_seconds": duration_seconds,
+            "sla_seconds": sla_seconds,
+            "sla_met": duration_seconds <= sla_seconds,
+        }
 
     async def _emit_execution_heartbeat(
         self,
@@ -578,6 +598,7 @@ class BaseOrchestrator(ABC):
         role: str = subtask.get("assigned_role", self._default_role())
         agent_id = self._role_to_agent_id(role)
         agent_role_enum = self._role_to_enum(role)
+        subtask_started_at = time.perf_counter()
 
         await _emit(
             EventType.TASK_STARTED,
@@ -697,14 +718,32 @@ class BaseOrchestrator(ABC):
                             "manifest_path": manifest.manifest_path,
                         },
                     )
+                    if evidence_payload.get("pushed"):
+                        await _emit(
+                            EventType.GIT_PUSH,
+                            self.team,
+                            agent_id,
+                            agent_role_enum,
+                            task_id=task_id,
+                            payload={
+                                "subtask_id": subtask["id"],
+                                "sha": commit_sha,
+                                "files": evidence_payload.get("files_changed"),
+                                "manifest_path": manifest.manifest_path,
+                            },
+                        )
 
+            runtime_metadata = self._subtask_runtime_metadata(
+                subtask=subtask,
+                started_at=subtask_started_at,
+            )
             self._trace(
                 task_id,
                 "subtask_complete",
                 f"Subtarefa '{subtask['title']}' encerrou execucao.",
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
-                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120], **runtime_metadata},
             )
             result = {
                 "agent_outputs": updated_outputs,
@@ -798,14 +837,32 @@ class BaseOrchestrator(ABC):
                             "manifest_path": manifest.manifest_path,
                         },
                     )
+                    if evidence_payload.get("pushed"):
+                        await _emit(
+                            EventType.GIT_PUSH,
+                            self.team,
+                            agent_id,
+                            agent_role_enum,
+                            task_id=task_id,
+                            payload={
+                                "subtask_id": subtask["id"],
+                                "sha": commit_sha,
+                                "files": evidence_payload.get("files_changed"),
+                                "manifest_path": manifest.manifest_path,
+                            },
+                        )
 
+            runtime_metadata = self._subtask_runtime_metadata(
+                subtask=subtask,
+                started_at=subtask_started_at,
+            )
             self._trace(
                 task_id,
                 "subtask_complete",
                 f"Subtarefa '{subtask['title']}' encerrou execucao.",
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
-                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120], **runtime_metadata},
             )
             result = {
                 "agent_outputs": updated_outputs,
@@ -898,14 +955,32 @@ class BaseOrchestrator(ABC):
                             "manifest_path": manifest.manifest_path,
                         },
                     )
+                    if evidence_payload.get("pushed"):
+                        await _emit(
+                            EventType.GIT_PUSH,
+                            self.team,
+                            agent_id,
+                            agent_role_enum,
+                            task_id=task_id,
+                            payload={
+                                "subtask_id": subtask["id"],
+                                "sha": commit_sha,
+                                "files": evidence_payload.get("files_changed"),
+                                "manifest_path": manifest.manifest_path,
+                            },
+                        )
 
+            runtime_metadata = self._subtask_runtime_metadata(
+                subtask=subtask,
+                started_at=subtask_started_at,
+            )
             self._trace(
                 task_id,
                 "subtask_complete",
                 f"Subtarefa '{subtask['title']}' encerrou execucao.",
                 agent_id=agent_id,
                 agent_role=agent_role_enum.value,
-                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+                metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120], **runtime_metadata},
             )
             result = {
                 "agent_outputs": updated_outputs,
@@ -1186,13 +1261,17 @@ class BaseOrchestrator(ABC):
             f"[execute_subtask] Subtarefa '{subtask['title']}' concluída. "
             f"Output: {output_text[:120]}..."
         )
+        runtime_metadata = self._subtask_runtime_metadata(
+            subtask=subtask,
+            started_at=subtask_started_at,
+        )
         self._trace(
             task_id,
             "subtask_complete",
             f"Subtarefa '{subtask['title']}' encerrou execucao.",
             agent_id=agent_id,
             agent_role=agent_role_enum.value,
-            metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120]},
+            metadata={"subtask_id": subtask["id"], "output_preview": output_text[:120], **runtime_metadata},
         )
 
         result = {
