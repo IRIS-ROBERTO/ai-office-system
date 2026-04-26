@@ -112,6 +112,22 @@ export interface DeliveryLedger {
   recommendations: string[];
 }
 
+export interface AgentAutonomyPolicy {
+  agent_id: string;
+  agent_role: string;
+  team: string;
+  eligible_for_autonomous: boolean;
+  maturity_level: string;
+  premium_score: number;
+  total_deliveries?: number;
+  approval_rate?: number;
+  functional_rate?: number;
+  github_push_rate?: number;
+  commit_traceability_rate?: number;
+  blockers: string[];
+  next_actions: string[];
+}
+
 export type PipelineState = 'pending' | 'active' | 'completed' | 'failed';
 export type SlaState = 'healthy' | 'warning' | 'breached';
 

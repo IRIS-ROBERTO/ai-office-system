@@ -1297,6 +1297,66 @@ button {
   line-height: 1.45;
 }
 
+.autonomy-policy-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.autonomy-policy-card--ok {
+  border-color: rgba(34, 197, 94, 0.26);
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.autonomy-policy-card--blocked {
+  border-color: rgba(250, 204, 21, 0.24);
+  background: rgba(250, 204, 21, 0.055);
+}
+
+.autonomy-policy-card div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.autonomy-policy-card span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.autonomy-policy-card strong {
+  color: #e2e8f0;
+}
+
+.autonomy-policy-card small,
+.autonomy-policy-card p,
+.autonomy-policy-card li,
+.config-error {
+  color: #a8b4c8;
+  line-height: 1.45;
+}
+
+.autonomy-policy-card ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.config-error {
+  margin: 10px 0 0;
+  color: #fca5a5;
+  font-size: 0.82rem;
+}
+
 @keyframes command-enter {
   from {
     opacity: 0;

@@ -45,6 +45,7 @@ from backend.core.improvement_loop import improvement_loop
 from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_handoff
 from backend.core.agent_personality import get_agent_config, update_agent_config
 from backend.core.agent_capability_matrix import build_agent_capability, build_agent_capability_matrix
+from backend.core.agent_autonomy_policy import assert_autonomous_allowed, build_autonomy_policy
 from backend.core.agent_runtime_gateway import get_runtime_gateway_status
 from backend.core.github_provisioning import get_github_provisioning_status
 from backend.core.memory_gateway import memory_gateway
@@ -999,8 +1000,30 @@ async def patch_agent_personality_config(agent_id: str, body: AgentPersonalityUp
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
 
     payload = body.model_dump(exclude_unset=True)
+    if payload.get("autonomy_level") == "autonomous":
+        try:
+            assert_autonomous_allowed(agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
     config = update_agent_config(agent, payload)
     return AgentPersonalityConfig(**config)
+
+
+@app.get("/agents/autonomy/policy")
+async def get_agents_autonomy_policy():
+    """Retorna bloqueios e elegibilidade para autonomia premium por agente."""
+    seed_agent_registry()
+    return build_autonomy_policy()
+
+
+@app.get("/agents/{agent_id}/autonomy-policy")
+async def get_agent_autonomy_policy_endpoint(agent_id: str):
+    """Retorna a politica de autonomia premium para um agente especifico."""
+    seed_agent_registry()
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
+    return build_autonomy_policy(agent).get("agent")
 
 
 @app.get("/agents/{agent_id}/capabilities", response_model=AgentCapabilities)

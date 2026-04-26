@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAgentProfile } from '../../data/agentProfiles';
 import type { Agent } from '../../state/officeStore';
-import type { AgentPersonalityConfig, DeliveryLedger, DeliveryLedgerAgent, ExecutionLogItem, OfficeTask } from '../../types/operations';
+import type {
+  AgentAutonomyPolicy,
+  AgentPersonalityConfig,
+  DeliveryLedger,
+  DeliveryLedgerAgent,
+  ExecutionLogItem,
+  OfficeTask,
+} from '../../types/operations';
 import { formatMinutes } from '../../utils/operations';
 
 interface AgentOperationsProps {
@@ -384,8 +391,10 @@ function AgentConfigEditor({
   agent: Agent | null;
 }) {
   const [config, setConfig] = useState<AgentPersonalityConfig | null>(null);
+  const [policy, setPolicy] = useState<AgentAutonomyPolicy | null>(null);
   const [form, setForm] = useState<EditableConfig>(DEFAULT_EDITABLE_CONFIG);
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -393,25 +402,33 @@ function AgentConfigEditor({
     async function loadConfig() {
       if (!agent) {
         setConfig(null);
+        setPolicy(null);
         setForm(DEFAULT_EDITABLE_CONFIG);
         return;
       }
 
       setStatus('loading');
       try {
-        const response = await fetch(`${apiUrl}/agents/${agent.agent_id}/config`);
+        const [response, policyResponse] = await Promise.all([
+          fetch(`${apiUrl}/agents/${agent.agent_id}/config`),
+          fetch(`${apiUrl}/agents/${agent.agent_id}/autonomy-policy`),
+        ]);
         if (!response.ok) {
           throw new Error(`Config indisponivel (${response.status})`);
         }
         const data = (await response.json()) as AgentPersonalityConfig;
+        const policyData = policyResponse.ok ? ((await policyResponse.json()) as AgentAutonomyPolicy) : null;
         if (!cancelled) {
           setConfig(data);
+          setPolicy(policyData);
           setForm(toEditableConfig(data, agent));
+          setSaveError('');
           setStatus('idle');
         }
       } catch {
         if (!cancelled) {
           setConfig(null);
+          setPolicy(null);
           setForm(toEditableConfig(null, agent));
           setStatus('error');
         }
@@ -427,6 +444,7 @@ function AgentConfigEditor({
   async function saveConfig() {
     if (!agent) return;
     setStatus('saving');
+    setSaveError('');
 
     const payload = {
       persona_name: form.persona_name,
@@ -445,13 +463,15 @@ function AgentConfigEditor({
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error(`Falha ao salvar (${response.status})`);
+        const errorPayload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(errorPayload?.detail || `Falha ao salvar (${response.status})`);
       }
       const data = (await response.json()) as AgentPersonalityConfig;
       setConfig(data);
       setForm(toEditableConfig(data, agent));
       setStatus('saved');
-    } catch {
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Falha ao salvar configuracao');
       setStatus('error');
     }
   }
@@ -550,9 +570,28 @@ function AgentConfigEditor({
         </select>
       </label>
 
+      <div className={`autonomy-policy-card ${policy?.eligible_for_autonomous ? 'autonomy-policy-card--ok' : 'autonomy-policy-card--blocked'}`}>
+        <div>
+          <span>Autonomia premium</span>
+          <strong>{policy?.eligible_for_autonomous ? 'Liberada' : 'Bloqueada'}</strong>
+        </div>
+        <small>
+          Score {Number(policy?.premium_score ?? 0).toFixed(1)} · {policy?.maturity_level ?? 'sem baseline'}
+        </small>
+        {policy?.blockers?.length ? (
+          <ul>
+            {policy.blockers.slice(0, 3).map((blocker) => <li key={blocker}>{blocker}</li>)}
+          </ul>
+        ) : (
+          <p>{policy?.next_actions?.[0] ?? 'Pronto para maior autonomia em entregas similares.'}</p>
+        )}
+      </div>
+
       <button className="primary-action" onClick={saveConfig} disabled={status === 'saving' || status === 'loading'}>
         Salvar configuração
       </button>
+
+      {saveError && <p className="config-error">{saveError}</p>}
 
       {config?.updated_at && (
         <p className="config-footnote">Última atualização: {new Date(config.updated_at).toLocaleString()}</p>
