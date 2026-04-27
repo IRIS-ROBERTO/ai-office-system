@@ -161,7 +161,15 @@ type ProductRegistryItem = {
   github_repo_url: string | null;
   product_value_gate?: ProductValueGate;
   provisioning_gate?: { approved: boolean; failed_checks: string[] };
+  last_test_result?: ProductFactoryTestResult;
   created_at: string;
+};
+
+type ProductFactoryTestResult = {
+  tested_at: string;
+  test_kind: string;
+  passed: boolean;
+  validation: { command: string; result: string; output?: string }[];
 };
 
 type ProductRegistryResponse = {
@@ -977,6 +985,8 @@ const InsightsModal: React.FC<{
   const [factoryMetrics, setFactoryMetrics] = useState<ProductFactoryMetrics | null>(null);
   const [factoryRegistry, setFactoryRegistry] = useState<ProductRegistryItem[]>([]);
   const [githubStatus, setGithubStatus] = useState<GitHubProvisioningStatus | null>(null);
+  const [testingImplementation, setTestingImplementation] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, string>>({});
   const [implementations, setImplementations] = useState<Record<string, InsightImplementation>>(
     Object.fromEntries(data.insights.map((item) => [item.category_id, item.implementation]).filter(([, value]) => Boolean(value))) as Record<string, InsightImplementation>,
   );
@@ -1188,6 +1198,29 @@ const InsightsModal: React.FC<{
       }));
     } finally {
       setCreatingApp(null);
+    }
+  };
+
+  const handleTestImplementation = async (cat: InsightCategory) => {
+    setTestingImplementation(cat.category_id);
+    setTestResult(prev => ({ ...prev, [cat.category_id]: 'Executando testes objetivos...' }));
+    try {
+      const resp = await fetch(`${apiUrl}/product-factory/${cat.category_id}/test`, { method: 'POST' });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(json?.detail || `Falha HTTP ${resp.status}`);
+      const result = json.test_result as ProductFactoryTestResult;
+      setTestResult(prev => ({
+        ...prev,
+        [cat.category_id]: `${result.passed ? 'Teste aprovado' : 'Teste reprovado'} · ${result.test_kind} · ${result.validation?.length ?? 0} checks`,
+      }));
+      refreshFactoryStatus();
+    } catch (e) {
+      setTestResult(prev => ({
+        ...prev,
+        [cat.category_id]: `Falha ao testar: ${e instanceof Error ? e.message : 'erro desconhecido'}`,
+      }));
+    } finally {
+      setTestingImplementation(null);
     }
   };
 
@@ -1502,6 +1535,23 @@ const InsightsModal: React.FC<{
               >
                 {creatingApp === cat.category_id ? 'Gerando app...' : 'Criar App + Commit'}
               </button>
+              <button
+                type="button"
+                onClick={() => handleTestImplementation(cat)}
+                disabled={!currentProduct || testingImplementation === cat.category_id}
+                style={{
+                  padding: '12px 18px', borderRadius: 8,
+                  border: `1px solid rgba(56,189,248,0.36)`,
+                  background: currentProduct ? 'rgba(56,189,248,0.12)' : 'rgba(100,116,139,0.1)',
+                  color: currentProduct ? '#38bdf8' : '#64748b',
+                  fontWeight: 800, fontSize: 12, letterSpacing: 0.4,
+                  cursor: !currentProduct || testingImplementation === cat.category_id ? 'wait' : 'pointer',
+                  transition: 'all 0.2s', whiteSpace: 'nowrap',
+                  marginTop: 8,
+                }}
+              >
+                {testingImplementation === cat.category_id ? 'Testando...' : 'Testar Implementação'}
+              </button>
               {dispatched && !isExec && (
                 <div style={{ marginTop: 8, fontSize: 10, color: '#60a5fa', textAlign: 'center' }}>
                   DEV · MKT em execução ↓
@@ -1515,6 +1565,11 @@ const InsightsModal: React.FC<{
               {applicationResult[cat.category_id] && (
                 <div style={{ marginTop: 8, fontSize: 10, color: '#22c55e', textAlign: 'center', maxWidth: 420 }}>
                   {applicationResult[cat.category_id]}
+                </div>
+              )}
+              {testResult[cat.category_id] && (
+                <div style={{ marginTop: 8, fontSize: 10, color: '#38bdf8', textAlign: 'center', maxWidth: 420 }}>
+                  {testResult[cat.category_id]}
                 </div>
               )}
               {isImplemented && currentImplementation?.success_criteria?.length ? (
@@ -1599,10 +1654,20 @@ const InsightsModal: React.FC<{
                       <Badge color={currentProduct.pushed_to_github ? '#22c55e' : '#facc15'}>
                         {currentProduct.pushed_to_github ? 'Push confirmado' : 'Push pendente'}
                       </Badge>
+                      {currentProduct.last_test_result && (
+                        <Badge color={currentProduct.last_test_result.passed ? '#22c55e' : '#f87171'}>
+                          {currentProduct.last_test_result.passed ? 'Teste aprovado' : 'Teste reprovado'}
+                        </Badge>
+                      )}
                     </div>
                     <div style={{ marginTop: 7, fontSize: 10, color: '#64748b', fontFamily: 'monospace', wordBreak: 'break-all' }}>
                       {currentProduct.application_slug} · commit {currentProduct.commit_sha || '—'} · {formatDate(currentProduct.created_at)}
                     </div>
+                    {currentProduct.last_test_result ? (
+                      <div style={{ marginTop: 7, fontSize: 10, color: currentProduct.last_test_result.passed ? '#22c55e' : '#f87171' }}>
+                        Último teste: {currentProduct.last_test_result.test_kind} · {formatDate(currentProduct.last_test_result.tested_at)}
+                      </div>
+                    ) : null}
                     {currentProduct.product_value_gate?.failed_checks?.length ? (
                       <div style={{ marginTop: 7, fontSize: 10, color: '#facc15' }}>
                         Pendências: {currentProduct.product_value_gate.failed_checks.join(', ')}

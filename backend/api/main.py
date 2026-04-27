@@ -55,6 +55,7 @@ from backend.core.application_factory import (
     create_application_from_insight,
     get_product_factory_metrics,
     list_product_factory_registry,
+    test_product_factory_implementation,
     update_product_factory_delivery_status,
 )
 from backend.config.settings import settings
@@ -1399,6 +1400,17 @@ async def product_factory_metrics():
 async def product_factory_registry(limit: int = 50):
     """Histórico persistido de produtos gerados pelo Product Factory."""
     return list_product_factory_registry(limit=limit)
+
+
+@app.post("/product-factory/{category_id}/test")
+async def test_product_factory_implementation_endpoint(category_id: str):
+    """Executa o teste correto para uma melhoria IRIS ou produto standalone."""
+    try:
+        return test_product_factory_implementation(category_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Implementacao '{category_id}' nao encontrada no Product Factory.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Falha ao testar implementacao: {exc}")
 
 
 @app.post("/research/insights/{category_id}/promote")

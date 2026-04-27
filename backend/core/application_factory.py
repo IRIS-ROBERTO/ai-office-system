@@ -8,6 +8,7 @@ exclusive commit history from the first delivery.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -397,6 +398,85 @@ def list_product_factory_registry(*, limit: int = 50) -> dict[str, Any]:
     return {"total": len(rows), "returned": len(limited), "items": limited}
 
 
+def test_product_factory_implementation(category_id: str) -> dict[str, Any]:
+    """Run the correct post-implementation test for an insight delivery."""
+    row = _latest_registry_item(category_id)
+    if row is None:
+        raise FileNotFoundError(category_id)
+
+    project_kind = str(row.get("project_kind") or "")
+    repo_strategy = str(row.get("repo_strategy") or "")
+    app_dir = Path(str(row.get("application_path") or ""))
+
+    if project_kind == "standalone_product" or repo_strategy == "dedicated_repository":
+        checks = _run_validation(app_dir)
+        test_kind = "standalone_product_smoke"
+    else:
+        checks = _run_platform_validation()
+        test_kind = "platform_release_gate"
+
+    passed = bool(checks) and all(item.get("result") == "passed" for item in checks)
+    result = {
+        "tested_at": datetime.now(timezone.utc).isoformat(),
+        "test_kind": test_kind,
+        "passed": passed,
+        "validation": checks,
+    }
+    updated = update_product_factory_test_result(
+        application_slug=str(row.get("application_slug") or ""),
+        test_result=result,
+    )
+    return {
+        "category_id": category_id,
+        "application_slug": row.get("application_slug"),
+        "project_kind": project_kind,
+        "repo_strategy": repo_strategy,
+        "test_result": result,
+        "registry_item": updated,
+    }
+
+
+def update_product_factory_test_result(
+    *,
+    application_slug: str,
+    test_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not application_slug:
+        return None
+
+    rows = _read_factory_registry()
+    updated: dict[str, Any] | None = None
+    for index in range(len(rows) - 1, -1, -1):
+        row = rows[index]
+        if row.get("application_slug") != application_slug:
+            continue
+        row["last_test_result"] = test_result
+        row["validation"] = test_result.get("validation") or row.get("validation")
+
+        value_gate = dict(row.get("product_value_gate") or {})
+        checks = dict(value_gate.get("checks") or {})
+        if checks:
+            checks["validation_passed"] = bool(test_result.get("passed"))
+            value_gate["checks"] = checks
+            value_gate["failed_checks"] = [name for name, ok in checks.items() if not ok]
+            score = _score_product_value_checks(checks)
+            value_gate["score"] = score
+            value_gate["approved"] = score >= int(value_gate.get("threshold") or 85) and not any(
+                name in value_gate["failed_checks"]
+                for name in ("validation_passed", "required_artifacts_present", "repository_ready")
+            )
+            row["product_value_gate"] = value_gate
+
+        rows[index] = row
+        updated = row
+        break
+
+    if updated is None:
+        return None
+    _write_factory_registry(rows)
+    return updated
+
+
 def get_product_factory_metrics() -> dict[str, Any]:
     rows = _read_factory_registry()
     if not rows:
@@ -442,6 +522,45 @@ def get_product_factory_metrics() -> dict[str, Any]:
         "value_gate_pass_rate": round(value_gate_passed / total * 100, 1),
         "average_value_score": round(value_score_total / total, 1),
     }
+
+
+def _latest_registry_item(category_id: str) -> dict[str, Any] | None:
+    rows = [
+        row for row in _read_factory_registry()
+        if str(row.get("category_id") or "") == category_id
+    ]
+    if not rows:
+        return None
+    rows.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return rows[0]
+
+
+def _run_platform_validation() -> list[dict[str, str]]:
+    commands = [
+        [_npm_executable(), "run", "quality"],
+    ]
+    checks: list[dict[str, str]] = []
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=180,
+        )
+        checks.append({
+            "command": " ".join(command),
+            "result": "passed" if result.returncode == 0 else "failed",
+            "output": ((result.stdout or "") + "\n" + (result.stderr or "")).strip()[-1200:],
+        })
+    return checks
+
+
+def _npm_executable() -> str:
+    return "npm.cmd" if os.name == "nt" else "npm"
 
 
 def _build_product_value_gate(
