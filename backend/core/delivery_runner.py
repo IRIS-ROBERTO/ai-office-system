@@ -22,6 +22,7 @@ from backend.core.delivery_evidence import (
     validate_delivery_evidence,
 )
 from backend.core.delivery_retrospective import write_manifest_retrospective
+from backend.core.delivery_supervisor import evaluate_delivery_supervisor
 from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 from backend.core.memory_gateway import memory_gateway
 
@@ -112,6 +113,14 @@ class DeliveryRunner:
                     evidence_result = repaired_result
 
         stages.extend(self._evidence_stages(evidence_result, require_commit=require_commit))
+        stages.append(
+            self._supervisor_stage(
+                evidence_result=evidence_result,
+                subtask=subtask,
+                agent_role=agent_role,
+                require_commit=require_commit,
+            )
+        )
         functional_stage = self._functional_readiness_stage(evidence_result, subtask)
         if functional_stage:
             stages.append(functional_stage)
@@ -265,6 +274,29 @@ class DeliveryRunner:
                 },
             ),
         ]
+
+    def _supervisor_stage(
+        self,
+        *,
+        evidence_result: EvidenceValidationResult,
+        subtask: dict[str, Any],
+        agent_role: str,
+        require_commit: bool,
+    ) -> DeliveryStage:
+        decision = evaluate_delivery_supervisor(
+            evidence_result=evidence_result,
+            subtask=subtask,
+            agent_role=agent_role,
+            require_commit=require_commit,
+        )
+        stage = decision.to_stage()
+        return DeliveryStage(
+            name=str(stage["name"]),
+            status=str(stage["status"]),
+            message=str(stage["message"]),
+            required=bool(stage["required"]),
+            metadata=dict(stage["metadata"]),
+        )
 
     def _functional_readiness_stage(
         self,

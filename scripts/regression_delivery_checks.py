@@ -22,6 +22,7 @@ def main() -> int:
         ("static_classifier", check_static_classifier),
         ("static_executor_evidence", check_static_executor_evidence),
         ("agent_governance_policy", check_agent_governance_policy),
+        ("delivery_supervisor_gate", check_delivery_supervisor_gate),
     ]:
         try:
             check()
@@ -170,6 +171,73 @@ def check_agent_governance_policy() -> None:
     product_factory = get_role_permissions("product_factory")
     if not product_factory["can_create_dedicated_repo"]:
         raise AssertionError("product_factory must own dedicated repo creation for new products")
+
+
+def check_delivery_supervisor_gate() -> None:
+    from backend.core.delivery_evidence import EvidenceValidationResult, DeliveryEvidence
+    from backend.core.delivery_supervisor import (
+        classify_delivery_type,
+        classify_repo_strategy,
+        evaluate_delivery_supervisor,
+    )
+
+    platform_subtask = {
+        "id": "governance-platform",
+        "title": "Melhoria da plataforma",
+        "description": "Implementar controle interno no repositorio principal.",
+        "acceptance_criteria": "Deve ser platform_improvement com commit no repo principal.",
+        "assigned_role": "backend",
+    }
+    product_subtask = {
+        **platform_subtask,
+        "id": "new-product",
+        "title": "Criar app novo",
+        "description": "Criar aplicacao nova com repositorio dedicado.",
+    }
+
+    platform_evidence = DeliveryEvidence(
+        task_id="task",
+        subtask_id="governance-platform",
+        repo_path=str(ROOT),
+        files_changed=["backend/core/example.py"],
+        validation=[{"command": "pytest", "result": "passed"}],
+        commit_message="test",
+        commit_sha="abcdef1",
+    )
+    platform_result = EvidenceValidationResult(True, "ok", platform_evidence)
+
+    if classify_delivery_type(platform_subtask) != "platform_improvement":
+        raise AssertionError("platform improvement was misclassified")
+    if classify_delivery_type(product_subtask) != "new_product":
+        raise AssertionError("new product was misclassified")
+    if classify_delivery_type({"title": "Entrega operacional", "description": "Implementar artefato."}) != "unspecified":
+        raise AssertionError("unmarked delivery should remain unspecified until repo strategy is known")
+    if classify_repo_strategy(str(ROOT)) != "main_repository":
+        raise AssertionError("main repo strategy was misclassified")
+
+    approved = evaluate_delivery_supervisor(
+        evidence_result=platform_result,
+        subtask=platform_subtask,
+        agent_role="backend",
+    )
+    if not approved.approved:
+        raise AssertionError("valid platform delivery was blocked: " + "; ".join(approved.reasons))
+
+    wrong_repo = evaluate_delivery_supervisor(
+        evidence_result=platform_result,
+        subtask=product_subtask,
+        agent_role="backend",
+    )
+    if wrong_repo.approved:
+        raise AssertionError("new product in main repo was incorrectly approved")
+
+    failed_evidence = evaluate_delivery_supervisor(
+        evidence_result=EvidenceValidationResult(False, "missing evidence", None),
+        subtask=platform_subtask,
+        agent_role="backend",
+    )
+    if failed_evidence.approved:
+        raise AssertionError("delivery without approved evidence was incorrectly approved")
 
 
 if __name__ == "__main__":
