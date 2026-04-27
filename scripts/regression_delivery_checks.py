@@ -23,6 +23,7 @@ def main() -> int:
         ("static_executor_evidence", check_static_executor_evidence),
         ("agent_governance_policy", check_agent_governance_policy),
         ("delivery_supervisor_gate", check_delivery_supervisor_gate),
+        ("capability_access_broker", check_capability_access_broker),
     ]:
         try:
             check()
@@ -238,6 +239,76 @@ def check_delivery_supervisor_gate() -> None:
     )
     if failed_evidence.approved:
         raise AssertionError("delivery without approved evidence was incorrectly approved")
+
+
+def check_capability_access_broker() -> None:
+    from backend.core import capability_access
+
+    original_store = capability_access._STORE_PATH
+    test_store = ROOT / ".runtime" / "regression-capability-access" / "requests.json"
+    capability_access._STORE_PATH = test_store
+    try:
+        if test_store.exists():
+            test_store.unlink()
+
+        web_request = capability_access.create_capability_request(
+            agent_id="qa_01",
+            agent_role="qa",
+            task_id="task-web",
+            resource_type="web",
+            resource="http://127.0.0.1:8124",
+            access_level="read",
+            reason="Testar endpoint local da entrega solicitada.",
+            duration_minutes=30,
+        )
+        if web_request["status"] != "pending":
+            raise AssertionError("new capability request must start pending")
+        if web_request["requires_human_approval"]:
+            raise AssertionError("local web read should not require human approval")
+
+        approved = capability_access.approve_capability_request(
+            web_request["request_id"],
+            approved_by="regression",
+        )
+        if approved["status"] != "approved":
+            raise AssertionError("capability request was not approved")
+
+        profile = capability_access.get_agent_access_profile("qa_01", agent_role="qa")
+        if not profile["can_use_web"]:
+            raise AssertionError("approved web access did not update agent profile")
+
+        screen_request = capability_access.create_capability_request(
+            agent_id="qa_01",
+            agent_role="qa",
+            task_id="task-screen",
+            resource_type="screen",
+            resource="primary-display",
+            access_level="control",
+            reason="Validar fluxo visual que nao possui API alternativa.",
+            duration_minutes=15,
+        )
+        if screen_request["risk"] != "critical" or not screen_request["requires_human_approval"]:
+            raise AssertionError("screen control must be critical and human-approved")
+
+        try:
+            capability_access.create_capability_request(
+                agent_id="qa_01",
+                agent_role="qa",
+                resource_type="directory",
+                resource=str(ROOT),
+                access_level="control",
+                reason="Invalid directory control request.",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("directory control access should be rejected")
+    finally:
+        capability_access._STORE_PATH = original_store
+        if test_store.exists():
+            test_store.unlink()
+        if test_store.parent.exists():
+            shutil.rmtree(test_store.parent, ignore_errors=True)
 
 
 if __name__ == "__main__":

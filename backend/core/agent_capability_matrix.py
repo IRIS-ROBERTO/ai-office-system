@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.core.capability_access import get_agent_access_profile
 from backend.core.runtime_registry import agent_registry, seed_agent_registry
 from backend.core.tool_governance import get_role_tool_policy
 from backend.tools.brain_router import get_brain_status
@@ -135,6 +136,7 @@ def build_agent_capability(agent_id: str) -> dict[str, Any]:
         "tool_policy": get_role_tool_policy(role),
         "brain_profile": brain_profiles.get(role, {}),
         "picoclaw": get_picoclaw_status(),
+        "access_policy": get_agent_access_profile(agent_id, agent_role=role),
         "upgrade_track": profile.get("upgrade_track", []),
     }
 

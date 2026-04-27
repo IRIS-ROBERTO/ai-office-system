@@ -40,6 +40,7 @@ class AgentCapabilities(BaseModel):
     tool_policy: dict
     brain_profile: dict = Field(default_factory=dict)
     picoclaw: dict
+    access_policy: dict = Field(default_factory=dict)
     upgrade_track: list[str] = Field(default_factory=list)
 
 
@@ -81,6 +82,22 @@ class MemoryCreateRequest(BaseModel):
     confidence: float = 0.8
     approved: bool = True
     metadata: dict = Field(default_factory=dict)
+
+
+class CapabilityAccessCreate(BaseModel):
+    agent_id: str = Field(..., min_length=2, max_length=120)
+    agent_role: str = Field(default="", max_length=80)
+    task_id: str = Field(default="", max_length=120)
+    resource_type: str = Field(..., pattern="^(web|directory|screen)$")
+    resource: str = Field(..., min_length=1, max_length=1000)
+    access_level: str = Field(..., pattern="^(read|write|execute|control)$")
+    reason: str = Field(..., min_length=10, max_length=2000)
+    duration_minutes: int = Field(default=60, ge=1, le=240)
+
+
+class CapabilityAccessDecision(BaseModel):
+    operator: str = Field(default="operator", max_length=120)
+    reason: str = Field(default="", max_length=1000)
 
 
 class SystemHealth(BaseModel):

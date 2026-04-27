@@ -55,6 +55,14 @@ from backend.core.agent_governance import (
     list_governance_transitions,
 )
 from backend.core.agent_runtime_gateway import get_runtime_gateway_status
+from backend.core.capability_access import (
+    approve_capability_request,
+    build_capability_access_policy,
+    create_capability_request,
+    get_agent_access_profile,
+    list_capability_requests,
+    reject_capability_request,
+)
 from backend.core.github_provisioning import get_github_provisioning_status
 from backend.core.memory_gateway import memory_gateway
 from backend.core.production_readiness import build_production_readiness_report
@@ -86,6 +94,8 @@ from backend.api.schemas import (
     AgentCapabilities,
     AgentPersonalityConfig,
     AgentPersonalityUpdate,
+    CapabilityAccessCreate,
+    CapabilityAccessDecision,
     MemoryCreateRequest,
     DeliveryAuditListResponse,
     DeliveryAuditTaskResponse,
@@ -1044,10 +1054,75 @@ async def get_agent_capabilities(agent_id: str):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
 
 
+@app.get("/agents/{agent_id}/capabilities/access")
+async def get_agent_capability_access(agent_id: str):
+    """Retorna grants ativos e solicitacoes pendentes de acesso sensivel."""
+    seed_agent_registry()
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' nao encontrado.")
+    return get_agent_access_profile(agent_id, agent_role=str(agent.get("agent_role") or ""))
+
+
 @app.get("/agents/capabilities/matrix")
 async def get_agent_capabilities_matrix():
     """Retorna matriz auditavel de autonomia, segmentacao, tools, memoria e MCPs."""
     return build_agent_capability_matrix()
+
+
+@app.get("/capability-access/policy")
+async def get_capability_access_policy():
+    """Retorna politica de acesso governado a Web, diretorios e tela."""
+    return build_capability_access_policy()
+
+
+@app.post("/capability-requests")
+async def create_capability_access_request(body: CapabilityAccessCreate):
+    """Cria uma solicitacao auditavel de capacidade sensivel para um agente."""
+    try:
+        return create_capability_request(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/capability-requests")
+async def list_capability_access_requests(
+    status: str | None = None,
+    agent_id: str | None = None,
+    include_expired: bool = True,
+):
+    """Lista solicitacoes de acesso com resumo por status."""
+    return list_capability_requests(
+        status=status,
+        agent_id=agent_id,
+        include_expired=include_expired,
+    )
+
+
+@app.post("/capability-requests/{request_id}/approve")
+async def approve_capability_access_request(request_id: str, body: CapabilityAccessDecision):
+    """Aprova uma solicitacao pendente de acesso sensivel."""
+    try:
+        return approve_capability_request(request_id, approved_by=body.operator)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Capability request '{request_id}' nao encontrada.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/capability-requests/{request_id}/reject")
+async def reject_capability_access_request(request_id: str, body: CapabilityAccessDecision):
+    """Rejeita uma solicitacao pendente de acesso sensivel."""
+    try:
+        return reject_capability_request(
+            request_id,
+            rejected_by=body.operator,
+            reason=body.reason,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Capability request '{request_id}' nao encontrada.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
