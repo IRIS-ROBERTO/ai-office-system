@@ -57,9 +57,11 @@ from backend.core.agent_governance import (
 from backend.core.agent_runtime_gateway import get_runtime_gateway_status
 from backend.core.capability_access import (
     approve_capability_request,
+    authorize_capability_use,
     build_capability_access_policy,
     create_capability_request,
     get_agent_access_profile,
+    list_capability_authorizations,
     list_capability_requests,
     reject_capability_request,
 )
@@ -94,6 +96,7 @@ from backend.api.schemas import (
     AgentCapabilities,
     AgentPersonalityConfig,
     AgentPersonalityUpdate,
+    CapabilityAccessAuthorize,
     CapabilityAccessCreate,
     CapabilityAccessDecision,
     MemoryCreateRequest,
@@ -1123,6 +1126,25 @@ async def reject_capability_access_request(request_id: str, body: CapabilityAcce
         raise HTTPException(status_code=404, detail=f"Capability request '{request_id}' nao encontrada.")
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/capability-access/authorize")
+async def authorize_capability_access(body: CapabilityAccessAuthorize):
+    """Autoriza ou nega uso imediato de plugin/skill contra um grant vigente."""
+    try:
+        return authorize_capability_use(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/capability-access/authorizations")
+async def list_capability_access_authorizations(
+    agent_id: str | None = None,
+    allowed: bool | None = None,
+    limit: int = 100,
+):
+    """Lista tentativas de autorizacao feitas por plugins/skills."""
+    return list_capability_authorizations(agent_id=agent_id, allowed=allowed, limit=limit)
 
 
 # ---------------------------------------------------------------------------

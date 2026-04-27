@@ -100,6 +100,15 @@ class CapabilityAccessDecision(BaseModel):
     reason: str = Field(default="", max_length=1000)
 
 
+class CapabilityAccessAuthorize(BaseModel):
+    agent_id: str = Field(..., min_length=2, max_length=120)
+    task_id: str = Field(default="", max_length=120)
+    resource_type: str = Field(..., pattern="^(web|directory|screen)$")
+    resource: str = Field(..., min_length=1, max_length=1000)
+    access_level: str = Field(..., pattern="^(read|write|execute|control)$")
+    tool_name: str = Field(default="", max_length=160)
+
+
 class SystemHealth(BaseModel):
     api: str
     redis: str

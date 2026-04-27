@@ -17,10 +17,17 @@ from urllib.parse import urlparse
 
 _ROOT = Path(__file__).resolve().parents[2]
 _STORE_PATH = _ROOT / ".runtime" / "capability-access" / "requests.json"
+_AUTHZ_LOG_PATH = _ROOT / ".runtime" / "capability-access" / "authorizations.json"
 _VALID_RESOURCE_TYPES = {"web", "directory", "screen"}
 _VALID_ACCESS_LEVELS = {"read", "write", "execute", "control"}
 _VALID_STATUSES = {"pending", "approved", "rejected", "expired"}
 _MAX_DURATION_MINUTES = 240
+_ACCESS_ORDER = {
+    "read": 1,
+    "write": 2,
+    "execute": 3,
+    "control": 4,
+}
 
 
 @dataclass
@@ -178,6 +185,80 @@ def get_agent_access_profile(agent_id: str, *, agent_role: str = "") -> dict[str
     }
 
 
+def authorize_capability_use(
+    *,
+    agent_id: str,
+    resource_type: str,
+    resource: str,
+    access_level: str,
+    task_id: str = "",
+    tool_name: str = "",
+) -> dict[str, Any]:
+    resource_type = _normalize(resource_type)
+    access_level = _normalize(access_level)
+    if resource_type not in _VALID_RESOURCE_TYPES:
+        raise ValueError(f"Invalid resource_type: {resource_type}")
+    if access_level not in _VALID_ACCESS_LEVELS:
+        raise ValueError(f"Invalid access_level: {access_level}")
+
+    normalized_resource = _normalize_resource(resource_type, resource)
+    records = [_refresh_expiration(item) for item in _load_records()]
+    _write_records(records)
+    matching_grants = [
+        item
+        for item in records
+        if item.get("agent_id") == agent_id
+        and item.get("status") == "approved"
+        and _grant_matches(
+            grant=item,
+            resource_type=resource_type,
+            normalized_resource=normalized_resource,
+            access_level=access_level,
+            task_id=task_id,
+        )
+    ]
+    allowed = bool(matching_grants)
+    decision = {
+        "allowed": allowed,
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "resource_type": resource_type,
+        "resource": resource,
+        "normalized_resource": normalized_resource,
+        "access_level": access_level,
+        "tool_name": tool_name,
+        "checked_at": _now().isoformat(),
+        "grant": matching_grants[0] if matching_grants else None,
+        "reason": (
+            "Autorizado por grant aprovado e vigente."
+            if allowed
+            else "Nenhum grant aprovado e vigente cobre este recurso, nivel e tarefa."
+        ),
+    }
+    _append_authorization_log(decision)
+    return decision
+
+
+def list_capability_authorizations(
+    *,
+    agent_id: str | None = None,
+    allowed: bool | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    records = _load_authorization_log()
+    if agent_id:
+        records = [item for item in records if item.get("agent_id") == agent_id]
+    if allowed is not None:
+        records = [item for item in records if bool(item.get("allowed")) is allowed]
+    records.sort(key=lambda item: str(item.get("checked_at") or ""), reverse=True)
+    limit = max(1, min(int(limit or 100), 500))
+    return {
+        "items": records[:limit],
+        "total": len(records),
+        "returned": min(limit, len(records)),
+    }
+
+
 def build_capability_access_policy() -> dict[str, Any]:
     return {
         "resource_types": sorted(_VALID_RESOURCE_TYPES),
@@ -195,6 +276,12 @@ def build_capability_access_policy() -> dict[str, Any]:
             "directory": ["filesystem MCP", "PicoClaw filesystem"],
             "screen": ["browser-use first", "desktop control only after explicit approval"],
         },
+        "plugin_contract": [
+            "Solicitar grant antes da primeira acao sensivel.",
+            "Consultar /capability-access/authorize imediatamente antes de executar.",
+            "Registrar tool_name para auditoria.",
+            "Negar execucao quando allowed=false.",
+        ],
     }
 
 
@@ -276,6 +363,26 @@ def _write_records(records: list[dict[str, Any]]) -> None:
     _STORE_PATH.write_text(json.dumps(records, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
+def _load_authorization_log() -> list[dict[str, Any]]:
+    if not _AUTHZ_LOG_PATH.exists():
+        return []
+    try:
+        raw = json.loads(_AUTHZ_LOG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _append_authorization_log(decision: dict[str, Any]) -> None:
+    records = _load_authorization_log()
+    records.append(decision)
+    records = records[-1000:]
+    _AUTHZ_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _AUTHZ_LOG_PATH.write_text(json.dumps(records, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
 def _find_record(records: list[dict[str, Any]], request_id: str) -> dict[str, Any]:
     for item in records:
         if item.get("request_id") == request_id:
@@ -289,6 +396,59 @@ def _refresh_expiration(item: dict[str, Any]) -> dict[str, Any]:
     if item.get("status") in {"pending", "approved"} and _is_expired(str(item.get("expires_at") or "")):
         item["status"] = "expired"
     return item
+
+
+def _grant_matches(
+    *,
+    grant: dict[str, Any],
+    resource_type: str,
+    normalized_resource: str,
+    access_level: str,
+    task_id: str,
+) -> bool:
+    if grant.get("resource_type") != resource_type:
+        return False
+    grant_level = str(grant.get("access_level") or "")
+    if _ACCESS_ORDER.get(grant_level, 0) < _ACCESS_ORDER.get(access_level, 0):
+        return False
+    grant_task = str(grant.get("task_id") or "").strip()
+    if grant_task and task_id and grant_task != task_id:
+        return False
+    if grant_task and not task_id:
+        return False
+
+    grant_resource = str(grant.get("normalized_resource") or "")
+    if resource_type == "directory":
+        return _directory_scope_matches(grant_resource, normalized_resource)
+    if resource_type == "web":
+        return _web_scope_matches(grant_resource, normalized_resource)
+    if resource_type == "screen":
+        return grant_resource == normalized_resource
+    return False
+
+
+def _directory_scope_matches(grant_resource: str, requested_resource: str) -> bool:
+    try:
+        grant_path = Path(grant_resource).resolve()
+        requested_path = Path(requested_resource).resolve()
+        requested_path.relative_to(grant_path)
+        return True
+    except Exception:
+        return False
+
+
+def _web_scope_matches(grant_resource: str, requested_resource: str) -> bool:
+    grant = urlparse(grant_resource)
+    requested = urlparse(requested_resource)
+    if (grant.scheme or "https").lower() != (requested.scheme or "https").lower():
+        return False
+    if (grant.hostname or "").lower() != (requested.hostname or "").lower():
+        return False
+    if grant.port != requested.port:
+        return False
+    grant_path = grant.path.rstrip("/")
+    requested_path = requested.path.rstrip("/")
+    return not grant_path or requested_path == grant_path or requested_path.startswith(grant_path + "/")
 
 
 def _is_expired(value: str) -> bool:

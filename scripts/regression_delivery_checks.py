@@ -245,11 +245,16 @@ def check_capability_access_broker() -> None:
     from backend.core import capability_access
 
     original_store = capability_access._STORE_PATH
+    original_authz = capability_access._AUTHZ_LOG_PATH
     test_store = ROOT / ".runtime" / "regression-capability-access" / "requests.json"
+    test_authz = ROOT / ".runtime" / "regression-capability-access" / "authorizations.json"
     capability_access._STORE_PATH = test_store
+    capability_access._AUTHZ_LOG_PATH = test_authz
     try:
         if test_store.exists():
             test_store.unlink()
+        if test_authz.exists():
+            test_authz.unlink()
 
         web_request = capability_access.create_capability_request(
             agent_id="qa_01",
@@ -276,6 +281,32 @@ def check_capability_access_broker() -> None:
         profile = capability_access.get_agent_access_profile("qa_01", agent_role="qa")
         if not profile["can_use_web"]:
             raise AssertionError("approved web access did not update agent profile")
+
+        allowed = capability_access.authorize_capability_use(
+            agent_id="qa_01",
+            task_id="task-web",
+            resource_type="web",
+            resource="http://127.0.0.1:8124/health",
+            access_level="read",
+            tool_name="browser-use",
+        )
+        if not allowed["allowed"]:
+            raise AssertionError("approved grant did not authorize matching web use")
+
+        denied_control = capability_access.authorize_capability_use(
+            agent_id="qa_01",
+            task_id="task-web",
+            resource_type="web",
+            resource="http://127.0.0.1:8124/health",
+            access_level="control",
+            tool_name="browser-use",
+        )
+        if denied_control["allowed"]:
+            raise AssertionError("read web grant should not authorize control")
+
+        authz_log = capability_access.list_capability_authorizations(agent_id="qa_01")
+        if authz_log["total"] < 2:
+            raise AssertionError("authorization attempts were not logged")
 
         screen_request = capability_access.create_capability_request(
             agent_id="qa_01",
@@ -305,8 +336,11 @@ def check_capability_access_broker() -> None:
             raise AssertionError("directory control access should be rejected")
     finally:
         capability_access._STORE_PATH = original_store
+        capability_access._AUTHZ_LOG_PATH = original_authz
         if test_store.exists():
             test_store.unlink()
+        if test_authz.exists():
+            test_authz.unlink()
         if test_store.parent.exists():
             shutil.rmtree(test_store.parent, ignore_errors=True)
 
