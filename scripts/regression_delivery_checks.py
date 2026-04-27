@@ -22,7 +22,9 @@ def main() -> int:
     failures: list[str] = []
     for name, check in [
         ("static_classifier", check_static_classifier),
+        ("document_classifier", check_document_classifier),
         ("static_executor_evidence", check_static_executor_evidence),
+        ("brain_router_rate_limit_isolation", check_brain_router_rate_limit_isolation),
         ("agent_governance_policy", check_agent_governance_policy),
         ("delivery_supervisor_gate", check_delivery_supervisor_gate),
         ("capability_access_broker", check_capability_access_broker),
@@ -72,6 +74,45 @@ def check_static_classifier() -> None:
     }
     if can_handle_static_web_delivery(complex_subtask):
         raise AssertionError("complex backend/database task was incorrectly routed as static HTML")
+
+
+def check_document_classifier() -> None:
+    from backend.core.static_web_delivery import can_handle_document_delivery
+
+    english_marketing_subtask = {
+        "id": "competitive-analysis",
+        "title": "Conduct Competitive Analysis",
+        "description": "Research workflow automation competitors, market positioning and channels.",
+        "acceptance_criteria": "Markdown report with thesis, risks and go-to-market recommendations.",
+        "assigned_role": "research",
+    }
+    if not can_handle_document_delivery(english_marketing_subtask):
+        raise AssertionError("English marketing analysis was not routed to deterministic document executor")
+
+    api_subtask = {
+        **english_marketing_subtask,
+        "description": "Build a FastAPI endpoint and database integration.",
+    }
+    if can_handle_document_delivery(api_subtask):
+        raise AssertionError("API/database work was incorrectly routed as document delivery")
+
+
+def check_brain_router_rate_limit_isolation() -> None:
+    from backend.tools import brain_router
+
+    brain_router._model_rate_limits.clear()
+    try:
+        brain_router.record_transient_openrouter_failure(
+            "LLM(model=openrouter/qwen/qwen3-coder:free)",
+            "Error code: 429 - Provider returned error",
+        )
+        status = brain_router.get_model_rate_limit_status()
+        if "qwen/qwen3-coder:free" not in status:
+            raise AssertionError("rate limit was not recorded under normalized OpenRouter model id")
+        if any(key.startswith("LLM(") for key in status):
+            raise AssertionError("rate limit was recorded under unstable LLM repr")
+    finally:
+        brain_router._model_rate_limits.clear()
 
 
 def check_static_executor_evidence() -> None:

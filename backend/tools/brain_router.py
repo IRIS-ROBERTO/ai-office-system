@@ -10,6 +10,7 @@ The router is deliberately conservative: paid models are not selected here.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -344,6 +345,7 @@ def record_transient_openrouter_failure(model: str, error: Exception | str) -> N
 
     Falhas de auth / rede: abre o circuito global para evitar spam de erros.
     """
+    model_id = _normalize_openrouter_model_id(model)
     err_str = _sanitize_failure(str(error))
     is_rate_limit = any(
         token in err_str.lower()
@@ -351,20 +353,20 @@ def record_transient_openrouter_failure(model: str, error: Exception | str) -> N
     )
 
     if is_rate_limit:
-        _model_rate_limits[model] = time.time() + _MODEL_RATE_LIMIT_COOLDOWN
+        _model_rate_limits[model_id] = time.time() + _MODEL_RATE_LIMIT_COOLDOWN
         logger.warning(
             "[BrainRouter] %s rate-limited — bloqueado por %ss, proximos candidatos livres.",
-            model or "unknown",
+            model_id or "unknown",
             _MODEL_RATE_LIMIT_COOLDOWN,
         )
     else:
         cooldown_seconds = max(30, int(settings.OPENROUTER_TRANSIENT_COOLDOWN_SECONDS or 300))
         _cloud_circuit["openrouter_disabled_until"] = time.time() + cooldown_seconds
-        _cloud_circuit["last_model"] = model
+        _cloud_circuit["last_model"] = model_id
         _cloud_circuit["last_failure"] = err_str
         logger.warning(
             "[BrainRouter] Falha nao-RateLimit em %s — circuito global aberto por %ss.",
-            model or "unknown",
+            model_id or "unknown",
             cooldown_seconds,
         )
 
@@ -382,6 +384,17 @@ def _cloud_circuit_status() -> dict[str, Any]:
         "last_model": _cloud_circuit.get("last_model") or "",
         "last_failure": _cloud_circuit.get("last_failure") or "",
     }
+
+
+def _normalize_openrouter_model_id(value: str) -> str:
+    raw = str(value or "").strip()
+    match = re.search(r"openrouter/([A-Za-z0-9_.-]+/[A-Za-z0-9_.:-]+)", raw)
+    if match:
+        return match.group(1)
+    match = re.search(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.:-]+:free)", raw)
+    if match:
+        return match.group(1)
+    return raw or "unknown"
 
 
 def _sanitize_failure(value: str) -> str:

@@ -67,6 +67,17 @@ def can_handle_document_delivery(subtask: dict[str, Any]) -> bool:
         "persona",
         "marketing",
         "campanha",
+        "analysis",
+        "analyze",
+        "competitive",
+        "competitor",
+        "competitors",
+        "market",
+        "audience",
+        "go-to-market",
+        "channels",
+        "positioning",
+        "workflow automation",
     )
     marketing_roles = {"research", "strategy", "content", "seo", "social", "analytics"}
     assigned_role = str(subtask.get("assigned_role") or "").strip().lower()
