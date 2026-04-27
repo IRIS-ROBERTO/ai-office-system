@@ -21,6 +21,7 @@ def main() -> int:
     for name, check in [
         ("static_classifier", check_static_classifier),
         ("static_executor_evidence", check_static_executor_evidence),
+        ("agent_governance_policy", check_agent_governance_policy),
     ]:
         try:
             check()
@@ -115,6 +116,60 @@ def check_static_executor_evidence() -> None:
         settings.GITHUB_TOKEN = original_token
         if project_root and project_root.exists():
             shutil.rmtree(project_root, ignore_errors=True)
+
+
+def check_agent_governance_policy() -> None:
+    from backend.core.agent_governance import (
+        build_governance_policy,
+        can_transition,
+        get_role_permissions,
+        assert_valid_transition,
+    )
+
+    policy = build_governance_policy()
+    states = set(policy["states"])
+    required_states = {
+        "intake",
+        "triage",
+        "planning",
+        "review",
+        "dispatch",
+        "execution",
+        "validation",
+        "archive",
+    }
+    missing_states = sorted(required_states - states)
+    if missing_states:
+        raise AssertionError("missing governance states: " + ", ".join(missing_states))
+
+    if not can_transition("intake", "triage"):
+        raise AssertionError("valid intake -> triage transition was blocked")
+    if not can_transition("validation", "archive"):
+        raise AssertionError("valid validation -> archive transition was blocked")
+    if can_transition("intake", "execution"):
+        raise AssertionError("invalid intake -> execution transition was allowed")
+
+    try:
+        assert_valid_transition("planning", "archive")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid planning -> archive transition did not raise")
+
+    orchestrator = set(get_role_permissions("orchestrator")["permissions"])
+    for permission in ("triage", "plan", "review", "dispatch", "audit", "commit"):
+        if permission not in orchestrator:
+            raise AssertionError(f"orchestrator missing permission: {permission}")
+
+    backend = get_role_permissions("backend")
+    if "execute" not in backend["permissions"] or "commit" not in backend["permissions"]:
+        raise AssertionError("backend role must execute and commit implementation work")
+    if "create_dedicated_repo" not in get_role_permissions("backend")["denied"]:
+        raise AssertionError("backend role must not create dedicated repos directly")
+
+    product_factory = get_role_permissions("product_factory")
+    if not product_factory["can_create_dedicated_repo"]:
+        raise AssertionError("product_factory must own dedicated repo creation for new products")
 
 
 if __name__ == "__main__":

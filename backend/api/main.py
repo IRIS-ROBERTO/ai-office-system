@@ -46,6 +46,14 @@ from backend.core.handoff import create_handoff, get_pending_handoffs, resolve_h
 from backend.core.agent_personality import get_agent_config, update_agent_config
 from backend.core.agent_capability_matrix import build_agent_capability, build_agent_capability_matrix
 from backend.core.agent_autonomy_policy import assert_autonomous_allowed, build_autonomy_policy
+from backend.core.agent_governance import (
+    assert_valid_transition,
+    build_governance_policy,
+    build_governance_status,
+    get_role_permissions,
+    list_governance_permissions,
+    list_governance_transitions,
+)
 from backend.core.agent_runtime_gateway import get_runtime_gateway_status
 from backend.core.github_provisioning import get_github_provisioning_status
 from backend.core.memory_gateway import memory_gateway
@@ -1195,6 +1203,46 @@ async def get_production_readiness():
 async def get_tool_governance():
     """Retorna a matriz de permissao para MCPs e ferramentas de agentes."""
     return list_tool_policies()
+
+
+@app.get("/agent-governance/policy")
+async def get_agent_governance_policy():
+    """Retorna a governanca institucional de fases, papeis e entregas."""
+    return build_governance_policy()
+
+
+@app.get("/agent-governance/status")
+async def get_agent_governance_status():
+    """Expoe o estado operacional da governanca institucional."""
+    return build_governance_status()
+
+
+@app.get("/agent-governance/transitions")
+async def get_agent_governance_transitions():
+    """Lista transicoes validas do fluxo multiagente."""
+    return {"transitions": list_governance_transitions()}
+
+
+@app.get("/agent-governance/permissions")
+async def get_agent_governance_permissions():
+    """Lista permissoes por papel operacional."""
+    return list_governance_permissions()
+
+
+@app.get("/agent-governance/permissions/{role}")
+async def get_agent_governance_role_permissions(role: str):
+    """Retorna permissoes institucionais para um papel especifico."""
+    return get_role_permissions(role)
+
+
+@app.get("/agent-governance/transition-check")
+async def check_agent_governance_transition(from_state: str, to_state: str):
+    """Valida uma transicao e bloqueia saltos fora do fluxo institucional."""
+    try:
+        assert_valid_transition(from_state, to_state)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"allowed": True, "from_state": from_state, "to_state": to_state}
 
 
 # ---------------------------------------------------------------------------
