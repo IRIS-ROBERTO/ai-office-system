@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -537,7 +538,9 @@ def _latest_registry_item(category_id: str) -> dict[str, Any] | None:
 
 def _run_platform_validation() -> list[dict[str, str]]:
     commands = [
-        [_npm_executable(), "run", "quality"],
+        [sys.executable, "-m", "compileall", "backend"],
+        [sys.executable, "scripts/regression_delivery_checks.py"],
+        [_npm_executable(), "--prefix", "frontend", "run", "build"],
     ]
     checks: list[dict[str, str]] = []
     for command in commands:
