@@ -32,7 +32,7 @@ ROLE_CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "frontend": {
         "autonomy": "bounded_specialist",
-        "declared_tools": ["workspace_file", "github_commit", "picoclaw_mcp"],
+        "declared_tools": ["workspace_file", "github_commit", "governed_web_fetch", "governed_browser_preflight", "picoclaw_mcp"],
         "memory_posture": "shared_memory_allowed",
         "segmentation": "UI, accessibility, performance and frontend build integrity",
         "upgrade_track": ["browser automation", "visual regression", "component library MCP"],
@@ -46,7 +46,7 @@ ROLE_CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "qa": {
         "autonomy": "bounded_specialist",
-        "declared_tools": ["workspace_file", "github_commit", "file_read", "directory_read", "code_executor", "picoclaw_mcp"],
+        "declared_tools": ["workspace_file", "github_commit", "file_read", "directory_read", "code_executor", "governed_web_fetch", "governed_browser_preflight", "picoclaw_mcp"],
         "memory_posture": "shared_memory_allowed",
         "segmentation": "test strategy, smoke checks, regression and release evidence",
         "upgrade_track": ["Playwright/browser-use bridge", "coverage trend memory", "failure clustering"],

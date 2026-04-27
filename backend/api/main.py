@@ -78,6 +78,7 @@ from backend.core.application_factory import (
 )
 from backend.config.settings import settings
 from backend.tools.brain_router import get_brain_status
+from backend.tools.governed_web_tool import governed_browser_preflight, governed_web_fetch
 from backend.tools.model_gate import gate
 from backend.tools.ollama_tool import check_ollama_health
 from backend.tools.picoclaw_tool import check_picoclaw_health, get_picoclaw_status
@@ -99,6 +100,8 @@ from backend.api.schemas import (
     CapabilityAccessAuthorize,
     CapabilityAccessCreate,
     CapabilityAccessDecision,
+    GovernedBrowserPreflightRequest,
+    GovernedWebFetchRequest,
     MemoryCreateRequest,
     DeliveryAuditListResponse,
     DeliveryAuditTaskResponse,
@@ -1145,6 +1148,18 @@ async def list_capability_access_authorizations(
 ):
     """Lista tentativas de autorizacao feitas por plugins/skills."""
     return list_capability_authorizations(agent_id=agent_id, allowed=allowed, limit=limit)
+
+
+@app.post("/governed-web/fetch")
+def governed_web_fetch_endpoint(body: GovernedWebFetchRequest):
+    """Executa leitura HTTP governada apos autorizacao vigente."""
+    return governed_web_fetch(**body.model_dump())
+
+
+@app.post("/governed-browser/preflight")
+def governed_browser_preflight_endpoint(body: GovernedBrowserPreflightRequest):
+    """Autoriza ou bloqueia uma acao de browser-use/Playwright antes da execucao."""
+    return governed_browser_preflight(**body.model_dump())
 
 
 # ---------------------------------------------------------------------------

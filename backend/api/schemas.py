@@ -109,6 +109,22 @@ class CapabilityAccessAuthorize(BaseModel):
     tool_name: str = Field(default="", max_length=160)
 
 
+class GovernedWebFetchRequest(BaseModel):
+    agent_id: str = Field(..., min_length=2, max_length=120)
+    task_id: str = Field(default="", max_length=120)
+    url: str = Field(..., min_length=1, max_length=1000)
+    method: str = Field(default="GET", pattern="^(GET|HEAD|get|head)$")
+    timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
+
+
+class GovernedBrowserPreflightRequest(BaseModel):
+    agent_id: str = Field(..., min_length=2, max_length=120)
+    task_id: str = Field(default="", max_length=120)
+    url: str = Field(..., min_length=1, max_length=1000)
+    action: str = Field(..., min_length=2, max_length=80)
+    tool_name: str = Field(default="browser-use", max_length=160)
+
+
 class SystemHealth(BaseModel):
     api: str
     redis: str

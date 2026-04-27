@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import shutil
 import sys
+import threading
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,7 @@ def main() -> int:
         ("agent_governance_policy", check_agent_governance_policy),
         ("delivery_supervisor_gate", check_delivery_supervisor_gate),
         ("capability_access_broker", check_capability_access_broker),
+        ("governed_web_tool", check_governed_web_tool),
     ]:
         try:
             check()
@@ -343,6 +346,82 @@ def check_capability_access_broker() -> None:
             test_authz.unlink()
         if test_store.parent.exists():
             shutil.rmtree(test_store.parent, ignore_errors=True)
+
+
+def check_governed_web_tool() -> None:
+    from backend.core import capability_access
+    from backend.tools.governed_web_tool import governed_browser_preflight, governed_web_fetch
+
+    original_store = capability_access._STORE_PATH
+    original_authz = capability_access._AUTHZ_LOG_PATH
+    test_store = ROOT / ".runtime" / "regression-governed-web" / "requests.json"
+    test_authz = ROOT / ".runtime" / "regression-governed-web" / "authorizations.json"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RegressionWebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    capability_access._STORE_PATH = test_store
+    capability_access._AUTHZ_LOG_PATH = test_authz
+    try:
+        request = capability_access.create_capability_request(
+            agent_id="qa_web_01",
+            agent_role="qa",
+            task_id="governed-web",
+            resource_type="web",
+            resource=base_url,
+            access_level="read",
+            reason="Validar ferramenta web governada em servidor local.",
+            duration_minutes=30,
+        )
+        capability_access.approve_capability_request(request["request_id"], approved_by="regression")
+
+        fetched = governed_web_fetch(
+            agent_id="qa_web_01",
+            task_id="governed-web",
+            url=f"{base_url}/health",
+        )
+        if not fetched["allowed"] or fetched["status"] != "fetched":
+            raise AssertionError("governed web fetch did not fetch authorized local URL")
+        if fetched["title"] != "IRIS Regression":
+            raise AssertionError("governed web fetch did not extract page title")
+
+        blocked = governed_browser_preflight(
+            agent_id="qa_web_01",
+            task_id="governed-web",
+            url=f"{base_url}/health",
+            action="click",
+        )
+        if blocked["allowed"]:
+            raise AssertionError("read grant should not authorize browser click/control")
+
+        method_block = governed_web_fetch(
+            agent_id="qa_web_01",
+            task_id="governed-web",
+            url=f"{base_url}/health",
+            method="POST",
+        )
+        if method_block["allowed"]:
+            raise AssertionError("governed web fetch should block POST")
+    finally:
+        server.shutdown()
+        server.server_close()
+        capability_access._STORE_PATH = original_store
+        capability_access._AUTHZ_LOG_PATH = original_authz
+        if test_store.parent.exists():
+            shutil.rmtree(test_store.parent, ignore_errors=True)
+
+
+class _RegressionWebHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        body = b"<html><head><title>IRIS Regression</title></head><body>ok</body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args) -> None:
+        return
 
 
 if __name__ == "__main__":
