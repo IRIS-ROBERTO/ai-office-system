@@ -1585,15 +1585,22 @@ async def promote_research_insight(category_id: str):
 
     pushed = await _push_iris_repo_to_github()
     result["pushed_to_github"] = pushed
-    result["implementation"] = research_store.mark_insight_implemented(
-        category_id,
-        method="promotion",
-        evidence={
-            "commit_sha": result.get("commit_sha"),
-            "repo_relative_path": result.get("repo_relative_path"),
-            "pushed_to_github": pushed,
-        },
-    )
+    delivery_mode = research_store.classify_insight_delivery(category_id)
+    if delivery_mode.get("repo_strategy") == "dedicated_repository":
+        result["implementation_pending"] = {
+            "reason": "Promotion creates a plan only. Standalone products require Create App + Commit with repository_ready=true.",
+            "delivery_mode": delivery_mode,
+        }
+    else:
+        result["implementation"] = research_store.mark_insight_implemented(
+            category_id,
+            method="promotion",
+            evidence={
+                "commit_sha": result.get("commit_sha"),
+                "repo_relative_path": result.get("repo_relative_path"),
+                "pushed_to_github": pushed,
+            },
+        )
     return result
 
 
@@ -1626,21 +1633,34 @@ async def create_research_application(category_id: str):
             result["provisioning_gate"] = updated.get("provisioning_gate")
             result["product_value_gate"] = updated.get("product_value_gate")
             result["github_repo_url"] = updated.get("github_repo_url")
-    result["implementation"] = research_store.mark_insight_implemented(
-        category_id,
-        method="application_factory",
-        evidence={
-            "application_slug": result.get("application_slug"),
-            "application_path": result.get("application_path"),
-            "repo_path": result.get("repo_path"),
-            "repo_strategy": result.get("repo_strategy"),
-            "github_repo_url": result.get("github_repo_url"),
-            "commit_sha": result.get("commit_sha"),
-            "validation": result.get("validation"),
-            "provisioning_gate": result.get("provisioning_gate"),
-            "pushed_to_github": result.get("pushed_to_github"),
-        },
-    )
+    evidence = {
+        "application_slug": result.get("application_slug"),
+        "application_path": result.get("application_path"),
+        "repo_path": result.get("repo_path"),
+        "repo_strategy": result.get("repo_strategy"),
+        "github_repo_url": result.get("github_repo_url"),
+        "commit_sha": result.get("commit_sha"),
+        "validation": result.get("validation"),
+        "provisioning_gate": result.get("provisioning_gate"),
+        "product_value_gate": result.get("product_value_gate"),
+        "pushed_to_github": result.get("pushed_to_github"),
+        "provisioning_error": result.get("provisioning_error"),
+    }
+    if (result.get("provisioning_gate") or {}).get("approved") and (result.get("product_value_gate") or {}).get("approved"):
+        result["implementation"] = research_store.mark_insight_implemented(
+            category_id,
+            method="application_factory",
+            evidence=evidence,
+        )
+    else:
+        result["implementation_pending"] = {
+            "reason": "Application generated locally, but implementation is not confirmed until provisioning and product gates pass.",
+            "failed_checks": {
+                "provisioning_gate": (result.get("provisioning_gate") or {}).get("failed_checks", []),
+                "product_value_gate": (result.get("product_value_gate") or {}).get("failed_checks", []),
+            },
+            "evidence": evidence,
+        }
     return result
 
 

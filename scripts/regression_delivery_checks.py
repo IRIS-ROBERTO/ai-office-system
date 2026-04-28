@@ -27,6 +27,7 @@ def main() -> int:
         ("brain_router_rate_limit_isolation", check_brain_router_rate_limit_isolation),
         ("agent_governance_policy", check_agent_governance_policy),
         ("delivery_supervisor_gate", check_delivery_supervisor_gate),
+        ("application_factory_pending_remote", check_application_factory_pending_remote),
         ("capability_access_broker", check_capability_access_broker),
         ("governed_web_tool", check_governed_web_tool),
     ]:
@@ -225,6 +226,7 @@ def check_delivery_supervisor_gate() -> None:
         classify_repo_strategy,
         evaluate_delivery_supervisor,
     )
+    from backend.core.gold_standard import GENERATED_PROJECTS_ROOT
 
     platform_subtask = {
         "id": "governance-platform",
@@ -276,6 +278,24 @@ def check_delivery_supervisor_gate() -> None:
     if wrong_repo.approved:
         raise AssertionError("new product in main repo was incorrectly approved")
 
+    dedicated_evidence = DeliveryEvidence(
+        task_id="task",
+        subtask_id="new-product",
+        repo_path=str(GENERATED_PROJECTS_ROOT / "new-product"),
+        files_changed=["README.md", "docs/MARKETING_BRIEF.md"],
+        validation=[{"command": "node tests/smoke-check.js", "result": "passed"}],
+        commit_message="test",
+        commit_sha="abcdef1",
+    )
+    dedicated_result = EvidenceValidationResult(True, "ok", dedicated_evidence)
+    marketing_dedicated = evaluate_delivery_supervisor(
+        evidence_result=dedicated_result,
+        subtask=product_subtask,
+        agent_role="research",
+    )
+    if not marketing_dedicated.approved:
+        raise AssertionError("marketing research delivery should be allowed in dedicated product repos")
+
     failed_evidence = evaluate_delivery_supervisor(
         evidence_result=EvidenceValidationResult(False, "missing evidence", None),
         subtask=platform_subtask,
@@ -283,6 +303,60 @@ def check_delivery_supervisor_gate() -> None:
     )
     if failed_evidence.approved:
         raise AssertionError("delivery without approved evidence was incorrectly approved")
+
+
+def check_application_factory_pending_remote() -> None:
+    from backend.config.settings import settings
+    from backend.core import application_factory
+
+    original_token = settings.GITHUB_TOKEN
+    original_generated = application_factory.GENERATED_PROJECTS_ROOT
+    original_runtime = application_factory._FACTORY_RUNTIME_DIR
+    original_registry = application_factory._FACTORY_REGISTRY
+    test_root = ROOT / ".runtime" / "regression-product-factory"
+    test_projects = test_root / "AIteams"
+    test_runtime = test_root / "factory"
+    settings.GITHUB_TOKEN = ""
+    application_factory.GENERATED_PROJECTS_ROOT = test_projects
+    application_factory._FACTORY_RUNTIME_DIR = test_runtime
+    application_factory._FACTORY_REGISTRY = test_runtime / "registry.jsonl"
+    try:
+        if test_root.exists():
+            shutil.rmtree(test_root, ignore_errors=True)
+        insight = {
+            "category_id": "produto_novo",
+            "title": "Produto Novo Regression",
+            "description": "Standalone product generated without GitHub repo scope.",
+            "recommendation": "Create MVP.",
+            "product_potential": {"score": 90, "pitch": "High-value market gap."},
+            "summary": {
+                "o_que_e": "Produto",
+                "para_que_serve": "Validar mercado",
+                "onde_usariamos": "Operacao",
+                "o_que_implementariamos": "MVP",
+            },
+            "top_projects": [{"name": "a"}, {"name": "b"}, {"name": "c"}],
+        }
+        result = application_factory.create_application_from_insight(insight)
+        if result["repo_strategy"] != "dedicated_repository":
+            raise AssertionError("new product should use dedicated repository strategy")
+        if result["pushed_to_github"]:
+            raise AssertionError("factory should not report GitHub push without token")
+        if (result["provisioning_gate"] or {}).get("approved"):
+            raise AssertionError("provisioning gate should remain blocked without GitHub repo")
+        if (result["product_value_gate"] or {}).get("approved"):
+            raise AssertionError("product value gate should remain blocked until repository is ready")
+        if not result.get("commit_sha"):
+            raise AssertionError("factory should still create a local commit for pending products")
+        if "GITHUB_TOKEN ausente" not in str(result.get("provisioning_error")):
+            raise AssertionError("factory should surface actionable GitHub provisioning error")
+    finally:
+        settings.GITHUB_TOKEN = original_token
+        application_factory.GENERATED_PROJECTS_ROOT = original_generated
+        application_factory._FACTORY_RUNTIME_DIR = original_runtime
+        application_factory._FACTORY_REGISTRY = original_registry
+        if test_root.exists():
+            shutil.rmtree(test_root, ignore_errors=True)
 
 
 def check_capability_access_broker() -> None:

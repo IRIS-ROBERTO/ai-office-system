@@ -168,5 +168,17 @@ def _role_can_use_repo_strategy(agent_role: str, repo_strategy: str) -> bool:
     if repo_strategy == "main_repository":
         return role in {"orchestrator", "backend", "frontend", "qa", "security", "docs", "planner"}
     if repo_strategy == "dedicated_repository":
-        return role in {"product_factory", "frontend", "backend", "docs", "orchestrator"}
+        return role in {
+            "product_factory",
+            "frontend",
+            "backend",
+            "docs",
+            "orchestrator",
+            "research",
+            "strategy",
+            "content",
+            "seo",
+            "social",
+            "analytics",
+        }
     return False

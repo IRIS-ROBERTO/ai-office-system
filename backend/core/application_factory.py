@@ -71,27 +71,26 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
 
     validation = _run_validation(app_dir)
     commit_message = f"SCOUT: create {slug} application"
-    remote_url = _ensure_repo_remote(repo_root) if standalone else None
-    commit_sha = _commit_paths(
+    remote_url, remote_error = _try_ensure_repo_remote(repo_root) if standalone else (None, "")
+    commit_sha, pushed, push_error = _commit_paths(
         written,
         commit_message,
         repo_root=repo_root,
-        push=standalone,
+        push=standalone and bool(remote_url),
         branch="main",
         remote_url=remote_url,
     )
+    provisioning_error = "; ".join(item for item in (remote_error, push_error) if item)
 
     provisioning_gate = _build_repo_provisioning_gate(
         repo_root=repo_root,
         remote_url=remote_url,
         branch="main",
         commit_sha=commit_sha,
-        pushed=standalone,
+        pushed=pushed,
         repo_strategy=delivery_mode["repo_strategy"],
+        provisioning_error=provisioning_error,
     )
-
-    if not provisioning_gate["approved"]:
-        raise RuntimeError("repo provisioning gate failed: " + "; ".join(provisioning_gate["failed_checks"]))
 
     product_value_gate = _build_product_value_gate(
         insight=insight,
@@ -117,10 +116,11 @@ def create_application_from_insight(insight: dict[str, Any]) -> dict[str, Any]:
         "validation": validation,
         "commit_message": commit_message,
         "commit_sha": commit_sha,
-        "pushed_to_github": standalone,
+        "pushed_to_github": pushed,
         "github_repo_url": remote_url.removesuffix(".git") if remote_url else None,
         "provisioning_gate": provisioning_gate,
         "product_value_gate": product_value_gate,
+        "provisioning_error": provisioning_error,
     }
     _append_factory_registry(result)
     return result
@@ -300,7 +300,7 @@ def _commit_paths(
     push: bool,
     branch: str,
     remote_url: str | None,
-) -> str:
+) -> tuple[str, bool, str]:
     relative_paths = [str(path.relative_to(repo_root)).replace("\\", "/") for path in paths]
     subprocess.run(["git", "add", "--", *relative_paths], cwd=repo_root, check=True, timeout=20)
     result = subprocess.run(
@@ -315,6 +315,8 @@ def _commit_paths(
     )
     if result.returncode != 0:
         raise RuntimeError((result.stdout + "\n" + result.stderr).strip() or "git commit failed")
+    pushed = False
+    push_error = ""
     if push and remote_url:
         push_url = _remote_url_with_token(remote_url, settings.GITHUB_TOKEN)
         push_result = subprocess.run(
@@ -328,7 +330,9 @@ def _commit_paths(
             timeout=60,
         )
         if push_result.returncode != 0:
-            raise RuntimeError((push_result.stdout + "\n" + push_result.stderr).strip() or "git push failed")
+            push_error = (push_result.stdout + "\n" + push_result.stderr).strip() or "git push failed"
+        else:
+            pushed = True
     sha = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=repo_root,
@@ -339,7 +343,14 @@ def _commit_paths(
         check=True,
         timeout=10,
     ).stdout.strip()
-    return sha
+    return sha, pushed, push_error
+
+
+def _try_ensure_repo_remote(repo_root: Path) -> tuple[str | None, str]:
+    try:
+        return _ensure_repo_remote(repo_root), ""
+    except Exception as exc:
+        return None, _human_github_error(exc)
 
 
 def _ensure_repo_remote(repo_root: Path) -> str:
@@ -384,6 +395,27 @@ def _remote_url_with_token(remote_url: str, token: str) -> str:
     if remote_url.startswith("https://github.com/"):
         return remote_url.replace("https://github.com/", f"https://x-access-token:{safe_token}@github.com/", 1)
     return remote_url
+
+
+def _human_github_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        try:
+            payload = exc.response.json()
+            message = str(payload.get("message") or exc.response.text)
+            documentation_url = str(payload.get("documentation_url") or "")
+        except Exception:
+            message = exc.response.text
+            documentation_url = ""
+        if status == 403:
+            return (
+                "GitHub recusou criar repositorio dedicado: 403 Forbidden. "
+                "O token precisa de permissao para criar repositorios "
+                "(classic: repo/public_repo; fine-grained: Administration write no owner). "
+                f"Detalhe: {message}. {documentation_url}"
+            ).strip()
+        return f"GitHub recusou criar repositorio dedicado: HTTP {status}. {message}".strip()
+    return f"Falha ao preparar repositorio remoto dedicado: {exc}"
 
 
 def _repo_relative_path(app_dir: Path, repo_root: Path) -> str:
@@ -598,7 +630,10 @@ def _build_product_value_gate(
     score = _score_product_value_checks(checks)
     failed = [name for name, ok in checks.items() if not ok]
     return {
-        "approved": score >= 85 and not any(name in failed for name in ("validation_passed", "required_artifacts_present")),
+        "approved": score >= 85 and not any(
+            name in failed
+            for name in ("validation_passed", "required_artifacts_present", "repository_ready")
+        ),
         "score": score,
         "failed_checks": failed,
         "checks": checks,
@@ -640,6 +675,7 @@ def _build_repo_provisioning_gate(
     commit_sha: str,
     pushed: bool,
     repo_strategy: str,
+    provisioning_error: str = "",
 ) -> dict[str, Any]:
     checks = {
         "git_repo_initialized": (repo_root / ".git").exists(),
@@ -660,6 +696,7 @@ def _build_repo_provisioning_gate(
         "approved": not failed,
         "failed_checks": failed,
         "checks": checks,
+        "error": provisioning_error,
     }
 
 
