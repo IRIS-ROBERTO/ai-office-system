@@ -27,6 +27,7 @@ def main() -> int:
         ("brain_router_rate_limit_isolation", check_brain_router_rate_limit_isolation),
         ("agent_governance_policy", check_agent_governance_policy),
         ("delivery_supervisor_gate", check_delivery_supervisor_gate),
+        ("standalone_promotion_state_repair", check_standalone_promotion_state_repair),
         ("application_factory_pending_remote", check_application_factory_pending_remote),
         ("capability_access_broker", check_capability_access_broker),
         ("governed_web_tool", check_governed_web_tool),
@@ -357,6 +358,67 @@ def check_application_factory_pending_remote() -> None:
         application_factory._FACTORY_REGISTRY = original_registry
         if test_root.exists():
             shutil.rmtree(test_root, ignore_errors=True)
+
+
+def check_standalone_promotion_state_repair() -> None:
+    from backend.core import research_store
+
+    original_implementations = research_store._implementations
+    original_findings = research_store._findings
+    research_store._implementations = {
+        "produto_novo": {
+            "status": "implemented",
+            "implemented": True,
+            "category_id": "produto_novo",
+            "title": "Oportunidade de Novo Produto",
+            "method": "promotion",
+            "confirmed_at": "2026-04-28T16:04:42-03:00",
+            "evidence": {"commit_sha": "legacy"},
+            "success_criteria": ["plano versionado criado", "commit_sha presente"],
+        },
+        "novos_plugins": {
+            "status": "implemented",
+            "implemented": True,
+            "category_id": "novos_plugins",
+            "title": "Novos Plugins para Agentes",
+            "method": "promotion",
+            "confirmed_at": "2026-04-28T16:04:42-03:00",
+            "evidence": {"commit_sha": "platform"},
+            "success_criteria": ["plano versionado criado", "commit_sha presente"],
+        },
+    }
+    research_store._findings = [
+        {
+            "id": "new-product-regression",
+            "title": "Standalone Product Regression",
+            "name": "standalone-product-regression",
+            "score": 90,
+            "topics": ["saas", "developer-tool"],
+            "iris_fit": ["Developer Experience"],
+        }
+    ]
+    try:
+        standalone = research_store.get_insight_implementation("produto_novo")
+        if standalone.get("implemented"):
+            raise AssertionError("legacy promotion should not keep standalone product implemented")
+        if standalone.get("status") != "pending_application":
+            raise AssertionError("legacy standalone promotion should become pending_application")
+        if not standalone.get("invalidated_reason"):
+            raise AssertionError("legacy standalone promotion should explain why it was invalidated")
+
+        platform = research_store.get_insight_implementation("novos_plugins")
+        if not platform.get("implemented"):
+            raise AssertionError("platform promotion should remain implemented")
+
+        try:
+            research_store.mark_insight_implemented("produto_novo", method="promotion")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("standalone product promotion should be rejected")
+    finally:
+        research_store._implementations = original_implementations
+        research_store._findings = original_findings
 
 
 def check_capability_access_broker() -> None:

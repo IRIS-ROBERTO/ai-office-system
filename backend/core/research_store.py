@@ -784,6 +784,25 @@ def get_insight_implementation(category_id: str) -> dict[str, Any]:
     record.setdefault("implemented", record.get("status") == "implemented")
     record.setdefault("success_criteria", [])
     record.setdefault("evidence", {})
+    record = _normalize_implementation_record(category_id, record)
+    return record
+
+
+def _normalize_implementation_record(category_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    delivery_mode = classify_insight_delivery(category_id)
+    is_dedicated_product = delivery_mode.get("repo_strategy") == "dedicated_repository"
+    if is_dedicated_product and record.get("method") == "promotion" and record.get("implemented"):
+        normalized = dict(record)
+        normalized.update({
+            "status": "pending_application",
+            "implemented": False,
+            "delivery_mode": delivery_mode,
+            "invalidated_reason": (
+                "Promotion creates a versioned plan only. Standalone products are implemented "
+                "only after Create App + Commit passes provisioning and product gates."
+            ),
+        })
+        return normalized
     return record
 
 
@@ -804,6 +823,11 @@ def mark_insight_implemented(
         raise KeyError(category_id)
 
     normalized_evidence = evidence or {}
+    delivery_mode = classify_insight_delivery(category_id)
+    if delivery_mode.get("repo_strategy") == "dedicated_repository" and method == "promotion":
+        raise ValueError(
+            "Standalone products cannot be confirmed by promotion; use Create App + Commit with approved gates."
+        )
     record = {
         "status": "implemented",
         "implemented": True,
@@ -811,7 +835,7 @@ def mark_insight_implemented(
         "title": insight.get("title"),
         "method": method,
         "confirmed_at": datetime.now(timezone.utc).isoformat(),
-        "delivery_mode": classify_insight_delivery(category_id),
+        "delivery_mode": delivery_mode,
         "evidence": normalized_evidence,
         "success_criteria": success_criteria or _success_criteria_for_method(method, normalized_evidence),
     }

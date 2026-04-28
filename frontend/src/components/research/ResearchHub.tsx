@@ -992,6 +992,12 @@ const InsightsModal: React.FC<{
   );
   const [selected, setSelected] = useState<string>(data.insights[0]?.category_id ?? '');
 
+  useEffect(() => {
+    setImplementations(
+      Object.fromEntries(data.insights.map((item) => [item.category_id, item.implementation]).filter(([, value]) => Boolean(value))) as Record<string, InsightImplementation>,
+    );
+  }, [data]);
+
   const cat = data.insights.find((c) => c.category_id === selected) ?? data.insights[0];
   const currentImplementation = cat ? (implementations[cat.category_id] ?? cat.implementation) : undefined;
   const isImplemented = !!currentImplementation?.implemented;
@@ -1919,17 +1925,30 @@ const ResearchHub: React.FC<Props> = ({ apiUrl }) => {
   const [insights, setInsights] = useState<InsightsResponse | null>(null);
   const [loadingInsights, setLoadingInsights] = useState(false);
 
+  const refreshInsights = useCallback(async () => {
+    const resp = await fetch(`${apiUrl}/research/insights`);
+    if (resp.ok) {
+      setInsights(await resp.json());
+    }
+  }, [apiUrl]);
+
   const handleOpenInsights = useCallback(async () => {
     setShowInsights(true);
-    if (insights) return;
-    setLoadingInsights(true);
+    if (!insights) setLoadingInsights(true);
     try {
-      const resp = await fetch(`${apiUrl}/research/insights`);
-      if (resp.ok) setInsights(await resp.json());
+      await refreshInsights();
     } finally {
       setLoadingInsights(false);
     }
-  }, [apiUrl, insights]);
+  }, [insights, refreshInsights]);
+
+  useEffect(() => {
+    if (!showInsights) return;
+    const id = window.setInterval(() => {
+      refreshInsights().catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, [refreshInsights, showInsights]);
 
   const loadData = useCallback(async () => {
     try {
